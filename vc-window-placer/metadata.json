@@ -1,0 +1,15 @@
+{
+  "KPlugin": {
+    "Name": "Voice Commander Window Placer",
+    "Description": "Moves newly opened windows to a target screen when requested by Voice Commander.",
+    "Icon": "preferences-system-windows",
+    "Authors": [{ "Name": "Voice Commander", "Email": "" }],
+    "Id": "vc-window-placer",
+    "Version": "1.0",
+    "License": "MIT",
+    "Website": ""
+  },
+  "X-Plasma-API": "javascript",
+  "X-Plasma-MainScript": "code/main.js",
+  "KPackageStructure": "KWin/Script"
+}

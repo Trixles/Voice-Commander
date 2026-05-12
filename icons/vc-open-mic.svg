@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="256mm"
+   height="256mm"
+   viewBox="0 0 256 256"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   sodipodi:docname="vc-open-mic.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#505050"
+     bordercolor="#ffffff"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="1"
+     inkscape:deskcolor="#505050"
+     inkscape:document-units="mm"
+     inkscape:zoom="0.72630719"
+     inkscape:cx="593.41282"
+     inkscape:cy="580.33296"
+     inkscape:window-width="2560"
+     inkscape:window-height="1362"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs1" />
+  <g
+     inkscape:label="Status Indicator"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <circle
+       style="fill:#ff584b;stroke-width:0.267818;fill-opacity:1"
+       id="path1"
+       cx="128"
+       cy="107.92973"
+       r="106.64181" />
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer4"
+     inkscape:label="Smile"
+     style="fill:#ffffff;stroke:#ffffff">
+    <ellipse
+       style="fill:#ffffff;stroke:#ffffff;stroke-width:0.249015"
+       id="path3"
+       cx="128"
+       cy="125.31429"
+       rx="61.207783"
+       ry="53.557781" />
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer2"
+     inkscape:label="Mic Stand">
+    <path
+       id="path2-6-0"
+       style="display:inline;fill:#000000;stroke-width:0.517252"
+       d="m 127.99999,55.241366 a 77.994805,72.184011 0 0 0 -77.994731,72.183944 77.994805,72.184011 0 0 0 77.994731,72.18395 77.994805,72.184011 0 0 0 77.99475,-72.18395 77.994805,72.184011 0 0 0 -77.99475,-72.183944 z m 0,19.967148 a 56.41998,52.216561 0 0 1 56.42024,52.216796 56.41998,52.216561 0 0 1 -56.42024,52.2168 56.41998,52.216561 0 0 1 -56.420246,-52.2168 56.41998,52.216561 0 0 1 56.420246,-52.216796 z" />
+    <rect
+       style="fill:#000000;fill-opacity:1;stroke:#000000;stroke-width:0.264583"
+       id="rect6"
+       width="36.577625"
+       height="60.790977"
+       x="109.71119"
+       y="188.29749"
+       rx="10"
+       ry="10" />
+    <rect
+       style="fill:#000000;fill-opacity:1;stroke:#000000;stroke-width:0.398188"
+       id="rect6-2"
+       width="36.444019"
+       height="138.19164"
+       x="219.63734"
+       y="-197.09583"
+       rx="9.9634733"
+       ry="22.73226"
+       transform="rotate(90)" />
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer3"
+     inkscape:label="Microphone"
+     style="display:inline">
+    <circle
+       style="fill:#000000;stroke-width:0.363136"
+       id="path2"
+       cx="128"
+       cy="57.38348"
+       r="52.676929" />
+    <circle
+       style="fill:#000000;stroke-width:0.363136"
+       id="path2-2"
+       cx="128"
+       cy="115.50909"
+       r="52.676929" />
+    <rect
+       style="fill:#000000;stroke-width:0.292754"
+       id="rect2"
+       width="105.35386"
+       height="54.96777"
+       x="75.323074"
+       y="56.563972" />
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer5"
+     inkscape:label="Eyes">
+    <ellipse
+       style="fill:#ffffff;stroke:#ffffff;stroke-width:0.264583"
+       id="path4"
+       cx="107.28214"
+       cy="88.292854"
+       rx="11.475"
+       ry="17.85" />
+    <ellipse
+       style="fill:#ffffff;stroke:#ffffff;stroke-width:0.264583"
+       id="path4-9"
+       cx="149.36235"
+       cy="88.292854"
+       rx="11.475"
+       ry="17.85" />
+  </g>
+</svg>

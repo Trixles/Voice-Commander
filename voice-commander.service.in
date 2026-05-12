@@ -1,0 +1,22 @@
+# Voice Commander -- systemd user service
+#
+# This file is a TEMPLATE. The install script substitutes @VENV_PYTHON@ and
+# @APP_DIR@ with real absolute paths at install time, then writes the result
+# to ~/.config/systemd/user/voice-commander.service.
+#
+# Do not copy this file directly into ~/.config/systemd/user/ -- it won't run
+# until the placeholders are resolved.
+
+[Unit]
+Description=Voice Commander
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@VENV_PYTHON@ @APP_DIR@/voice_commander.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

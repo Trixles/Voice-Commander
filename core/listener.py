@@ -164,6 +164,7 @@ def _normalize(text: str) -> str:
     text = text.replace("moved to ", "move to ")
     text = text.replace("up and ", "open ")
     text = text.replace("hope in ", "open ")
+    text = text.replace("oh been ", "open ")
     text = text.replace("cause ", "close ")
     text = text.replace("mike", "microphone")
     return text

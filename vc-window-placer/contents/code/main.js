@@ -3,7 +3,7 @@
  *
  * Voice Commander KWin helper script.
  *
- * Voice Commander writes a comma-separated queue of target output names into
+ * Voice Commander writes a comma-separated queue of placement entries into
  * kwinrc under [Script-vc-window-placer] nextScreen, then triggers a reload
  * via the org.kde.kwin.Scripting DBus interface (unloadScript / loadScript /
  * start). loadScript re-reads kwinrc from disk and creates a fresh JS engine,
@@ -12,9 +12,19 @@
  * (org.kde.KWin.reconfigure does NOT re-execute user scripts in current
  * Plasma 6 -- only the Scripting interface does.)
  *
- * The _handlerRegistered guard below is inert in practice (each loadScript
- * gets a fresh engine, so the guard always passes) but kept as a defensive
- * no-op in case KWin's behavior changes.
+ * Queue entries are "output:wm_class_hint" pairs, e.g.
+ *   "DP-2:waterfox-g,HDMI-A-1:dolphin"
+ *
+ * On windowAdded, the handler walks the queue and matches an arriving window
+ * to the first entry whose tag substring-matches the window's resourceClass
+ * (bidirectional). An empty tag matches anything (preserves head-of-queue
+ * behavior for actions with no class hint). If no entry matches, the window
+ * is left alone -- we don't steal slots for windows the user didn't ask for.
+ *
+ * Why match by class instead of order-of-arrival: windowAdded fires when each
+ * app *maps* its window, which is fastest-app-wins. The user-intended order
+ * (launch order on the Python side) is different from arrival order whenever
+ * one of the apps is slower to map than another. Tagging removes the race.
  */
 
 "use strict";
@@ -25,7 +35,15 @@
 var _queue = [];
 
 var raw = readConfig("nextScreen", "").trim();
-_queue = raw ? raw.split(",").map(function(s) { return s.trim(); }).filter(Boolean) : [];
+if (raw) {
+    _queue = raw.split(",").map(function(s) {
+        var parts = s.trim().split(":");
+        return {
+            output: (parts[0] || "").trim(),
+            tag:    (parts[1] || "").trim().toLowerCase()
+        };
+    }).filter(function(e) { return e.output; });
+}
 print("[vc-window-placer] Queue loaded: " + JSON.stringify(_queue));
 
 // Register the windowAdded handler ONCE across the lifetime of this script's
@@ -43,17 +61,45 @@ if (typeof _handlerRegistered === "undefined") {
             return;
         }
 
-        var outputName = _queue.shift();
+        var cls = (window.resourceClass || "").toLowerCase();
+
+        // Find the first queue entry whose tag matches this window's class.
+        // Bidirectional substring: handles "waterfox-g" tag vs "waterfox" class
+        // and "dolphin" tag vs "org.kde.dolphin" class.
+        // An empty tag matches anything (untagged entries are placement-only).
+        var matchIdx = -1;
+        for (var i = 0; i < _queue.length; i++) {
+            var tag = _queue[i].tag;
+            if (!tag) {
+                matchIdx = i;
+                break;
+            }
+            if (cls && (cls.indexOf(tag) !== -1 || tag.indexOf(cls) !== -1)) {
+                matchIdx = i;
+                break;
+            }
+        }
+
+        if (matchIdx === -1) {
+            print("[vc-window-placer] windowAdded: '" + window.caption +
+                  "' resourceClass='" + cls +
+                  "' -- no queue entry matched, ignoring");
+            return;
+        }
+
+        var entry = _queue.splice(matchIdx, 1)[0];
         print("[vc-window-placer] windowAdded: '" + window.caption +
-              "' -> placing on " + outputName +
+              "' resourceClass='" + cls +
+              "' matched tag='" + entry.tag +
+              "' -> placing on " + entry.output +
               " (" + _queue.length + " remaining in queue)");
 
         var target = workspace.screens.find(function(screen) {
-            return screen.name === outputName;
+            return screen.name === entry.output;
         });
 
         if (!target) {
-            print("[vc-window-placer] No screen found with name: " + outputName);
+            print("[vc-window-placer] No screen found with name: " + entry.output);
             return;
         }
 

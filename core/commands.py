@@ -29,7 +29,6 @@ import os
 import re
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -74,7 +73,6 @@ CONFIG_PATH = os.path.expanduser("~/.config/voice-commander/commands.json")
 CHECK_MTIME_EVERY = 100
 DEFAULT_THRESHOLD = 0.75
 DEFAULT_COOLDOWN = 3
-_NEXT_SCREEN_CLEAR_DELAY = 2.0
 
 _commands: list[dict] = []
 _config: dict = {}
@@ -137,6 +135,29 @@ def _detect_default_browser() -> str | None:
 
 
 _README_DEFAULT_PATH = os.path.expanduser("~/.local/share/voice-commander/README.md")
+
+
+# -- Monitor alias defaults ---------------------------------------------------
+# Duplicated from settings._default_aliases to keep this module Qt-free.
+# If you change one, change the other.
+
+_NUMBER_WORDS = [
+    "one", "two", "three", "four", "five",
+    "six", "seven", "eight", "nine", "ten",
+]
+
+
+def _default_aliases(index_1based: int) -> list[str]:
+    """Generate default aliases for a monitor at 1-based index.
+    Vosk outputs phonetic text only, so numeric aliases are useless."""
+    if index_1based <= len(_NUMBER_WORDS):
+        word = _NUMBER_WORDS[index_1based - 1]
+        aliases = [f"monitor {word}"]
+        # Common Vosk mishearing: "two" -> "to"
+        if word == "two":
+            aliases.append("monitor to")
+        return aliases
+    return [f"monitor {index_1based}"]
 
 
 def _default_commands() -> list[dict]:
@@ -298,6 +319,37 @@ def load_config() -> None:
 
     _last_mtime = os.path.getmtime(CONFIG_PATH)
     print(f"[commands] Loaded {len(_commands)} command(s) from {CONFIG_PATH}")
+
+
+def seed_monitor_defaults() -> None:
+    """
+    If the monitors block is empty but kscreen-doctor knows about connected
+    outputs, populate it with default aliases and persist to disk.
+
+    Self-healing: runs every startup. If a user clears their monitors block,
+    it gets repopulated on next launch. If aliases are already set, no-op.
+
+    Must be called AFTER load_config() AND windows.refresh_monitor_map().
+    """
+    global _config
+
+    if _config.get("monitors"):
+        return  # Already populated; respect the user's choices.
+
+    outputs = windows.get_connected_outputs()
+    if not outputs:
+        return  # No monitors detected; nothing to seed.
+
+    monitors: dict[str, list[str]] = {}
+    for i, m in enumerate(outputs):
+        monitors[m["name"]] = _default_aliases(i + 1)
+
+    _config["monitors"] = monitors
+
+    real_path = os.path.realpath(CONFIG_PATH)
+    with open(real_path, "w") as f:
+        json.dump(_config, f, indent=2)
+    print(f"[commands] Seeded default monitor aliases: {monitors}")
 
 
 def _check_reload(gui_env: dict = None) -> None:
@@ -463,16 +515,6 @@ def _detect_on_monitor(heard: str) -> str | None:
         return best_output
     print(f"[commands] 'on' target: '{candidate}' -- no alias match above threshold (best {best_score:.2f})")
     return None
-
-
-# -- Delayed nextScreen clear -------------------------------------------------
-
-def _clear_next_screen_after(delay: float, gui_env: dict) -> None:
-    def _clear():
-        time.sleep(delay)
-        windows.write_next_screen("", gui_env)
-    t = threading.Thread(target=_clear, daemon=True)
-    t.start()
 
 
 # -- Single-segment scoring ---------------------------------------------------
@@ -661,7 +703,7 @@ def _dispatch_with_monitor(cmd: dict, args: dict, target_output: str | None,
                            gui_env: dict, context) -> None:
     """
     Handle optional "on [alias]" monitor routing, then dispatch the command.
-    Encapsulates the write-nextScreen -> sleep -> dispatch -> delayed-clear flow.
+    The placer script's queue self-drains via _queue.shift(); no clear needed.
     """
     if target_output:
         windows.write_next_screen(target_output, gui_env)
@@ -670,9 +712,6 @@ def _dispatch_with_monitor(cmd: dict, args: dict, target_output: str | None,
         _log.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target_output}")
 
     _dispatch(cmd, args, gui_env, context)
-
-    if target_output:
-        _clear_next_screen_after(_NEXT_SCREEN_CLEAR_DELAY, gui_env)
 
 
 # -- Main entry point ---------------------------------------------------------
@@ -756,8 +795,6 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                     print(f"[commands] Best match: '{cmd['name']}'")
                     _dispatch(cmd, args, gui_env, context)
 
-                if targets:
-                    _clear_next_screen_after(_NEXT_SCREEN_CLEAR_DELAY, gui_env)
                 return True
             # else: fall through to single-match below
 

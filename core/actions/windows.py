@@ -18,12 +18,8 @@ The output-to-screen mapping is built once at startup by refresh_monitor_map()
 and refreshed on every config hot-reload. This avoids calling kscreen-doctor
 on every monitor-move command.
 
-REQUIREMENT: Each "Window to Screen N" shortcut must have an active keybinding
-in System Settings -> Keyboard -> Shortcuts -> KWin. Without a binding,
-invokeShortcut silently does nothing.
-
 close_window uses invokeShortcut "Window Close" via kglobalaccel -- same
-pattern. Requires an active keybinding for "Window Close" in KWin shortcuts.
+pattern as the screen-move shortcuts.
 """
 
 import json
@@ -98,30 +94,64 @@ def get_connected_outputs() -> list[dict]:
 def write_next_screen(output_name: str, gui_env: dict) -> None:
     """
     Signal the vc-window-placer KWin script to move the next new normal window
-    to `output_name`. Writes via kwriteconfig6 into kwinrc, then calls KWin
-    reconfigure so readConfig() in the script sees the new value immediately.
+    to `output_name`. Writes via kwriteconfig6 into kwinrc, then forces KWin
+    to re-execute the placer script via unloadScript / loadScript / start on
+    the Scripting DBus interface.
+
+    KWin's `org.kde.KWin.reconfigure` does NOT re-execute user scripts -- only
+    the Scripting interface does. `loadScript` reads kwinrc fresh on each
+    invocation, so no reconfigure is needed between the kwriteconfig6 write
+    and the reload. `unloadScript` first prevents the script's windowAdded
+    handler from stacking across calls.
 
     Pass empty string to clear the signal after dispatch.
     """
+    placer_id = "vc-window-placer"
+    placer_path = os.path.expanduser(
+        "~/.local/share/kwin/scripts/vc-window-placer/contents/code/main.js"
+    )
+
     try:
         subprocess.run(
             [
                 "kwriteconfig6",
-                "--file", "kwinrc",
+                "--file", os.path.expanduser("~/.config/kwinrc"),
                 "--group", "Script-vc-window-placer",
                 "--key", "nextScreen",
                 output_name,
             ],
             env=gui_env, check=True,
+            capture_output=True, text=True,
+        )
+
+        subprocess.run(
+            [
+                "dbus-send", "--session", "--print-reply",
+                "--dest=org.kde.KWin", "/Scripting",
+                "org.kde.kwin.Scripting.unloadScript",
+                f"string:{placer_id}",
+            ],
+            env=gui_env,
         )
         subprocess.run(
             [
                 "dbus-send", "--session", "--print-reply",
-                "--dest=org.kde.KWin", "/KWin",
-                "org.kde.KWin.reconfigure",
+                "--dest=org.kde.KWin", "/Scripting",
+                "org.kde.kwin.Scripting.loadScript",
+                f"string:{placer_path}",
+                f"string:{placer_id}",
             ],
             env=gui_env,
         )
+        subprocess.run(
+            [
+                "dbus-send", "--session", "--print-reply",
+                "--dest=org.kde.KWin", "/Scripting",
+                "org.kde.kwin.Scripting.start",
+            ],
+            env=gui_env,
+        )
+
         if output_name:
             print(f"[windows] Set next-screen signal: {output_name}")
         else:
@@ -175,14 +205,14 @@ def _resolve_monitor(raw: str) -> tuple[str, int]:
     return best_output, screen_index
 
 
-def move_window_to_monitor(monitor: str, gui_env: dict, context=None) -> None:
+def move_window_to_monitor(alias: str, gui_env: dict, context=None) -> None:
     """
-    Move the active window to the monitor matching `monitor` (raw alias from Vosk).
+    Move the active window to the monitor matching `alias` (raw alias from Vosk).
     Resolves alias -> output name -> KWin screen index, then invokes the
     'Window to Screen N' shortcut via kglobalaccel.
     """
     try:
-        output_name, screen_index = _resolve_monitor(monitor)
+        output_name, screen_index = _resolve_monitor(alias)
     except ValueError as e:
         print(f"[windows] move_window_to_monitor failed: {e}")
         return
@@ -261,8 +291,7 @@ def move_window_right(gui_env: dict, context=None) -> None:
 def close_window(gui_env: dict, context=None) -> None:
     """
     Close the active window by invoking the 'Window Close' KWin global shortcut
-    via kglobalaccel. Requires an active keybinding for that shortcut in
-    System Settings -> Keyboard -> Shortcuts -> KWin.
+    via kglobalaccel.
     """
     subprocess.Popen(
         [

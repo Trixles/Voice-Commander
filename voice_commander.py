@@ -90,6 +90,7 @@ def main() -> None:
 
     commands.load_config()
     refresh_monitor_map(GUI_ENV)
+    commands.seed_monitor_defaults()
 
     try:
         model_path = commands.get_vosk_model_path()

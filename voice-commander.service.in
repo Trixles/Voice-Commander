@@ -14,6 +14,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
+Environment=PYTHONUNBUFFERED=1
 ExecStart=@VENV_PYTHON@ @APP_DIR@/voice_commander.py
 Restart=on-failure
 RestartSec=5

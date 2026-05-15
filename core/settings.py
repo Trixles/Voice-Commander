@@ -60,6 +60,10 @@ from PySide6.QtWidgets import (
 )
 
 from core.commands import ACTION_REGISTRY, CONFIG_PATH, get_vosk_model_path, _default_commands
+from core.aliases import (
+    PINNED_SLOT as _PINNED_SLOT,
+    default_aliases as _default_aliases,
+)
 from core.actions.windows import get_connected_outputs
 from core.env import GUI_ENV
 
@@ -91,24 +95,7 @@ _SELECTABLE_ACTIONS = [
 _HIDDEN_COMMANDS = {"move_to_monitor", "set_volume", "open_settings"}
 
 # Slot-pinned rows: permanently expanded, fully read-only, always at bottom.
-_PINNED_SLOT: list[dict] = [
-    {
-        "name": "set_volume",
-        "display_name": "Set Volume",
-        "phrases": ["set volume to {level}", "set it to {level}"],
-        "action": "set_volume",
-        "args": {},
-        "slots": {"level": {"fuzzy": False}},
-    },
-    {
-        "name": "move_to_monitor",
-        "display_name": "Move to Alias",
-        "phrases": ["move to {alias}"],
-        "action": "move_window_to_monitor",
-        "args": {},
-        "slots": {"alias": {"fuzzy": False}},
-    },
-]
+# Canonical definition lives in core/aliases.py; imported above.
 _PINNED_SLOT_NAMES = {p["name"] for p in _PINNED_SLOT}
 
 _ACTION_LABELS = {
@@ -955,30 +942,6 @@ class CommandsContainer(QWidget):
         for pinned in _PINNED_SLOT:
             result.append(dict(pinned))
         return result
-
-
-# -- Default monitor aliases --------------------------------------------------
-
-_NUMBER_WORDS = [
-    "one", "two", "three", "four", "five",
-    "six", "seven", "eight", "nine", "ten",
-]
-
-
-def _default_aliases(index_1based: int) -> list[str]:
-    """Generate default aliases for a monitor at 1-based index.
-    Returns e.g. ["monitor two", "monitor to"] for index 2.
-    Vosk outputs phonetic text only, so numeric aliases are useless.
-    """
-    if index_1based <= len(_NUMBER_WORDS):
-        word = _NUMBER_WORDS[index_1based - 1]
-        aliases = [f"monitor {word}"]
-        # Common Vosk mishearing: "two" -> "to"
-        if word == "two":
-            aliases.append("monitor to")
-    else:
-        aliases = [f"monitor {index_1based}"]
-    return aliases
 
 
 # -- Monitor row widget -------------------------------------------------------

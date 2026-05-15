@@ -35,6 +35,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from core.actions import apps, system, windows
+from core.aliases import PINNED_SLOT, default_aliases as _default_aliases
 
 
 # -- Notify helper ------------------------------------------------------------
@@ -135,29 +136,6 @@ def _detect_default_browser() -> str | None:
 
 
 _README_DEFAULT_PATH = os.path.expanduser("~/.local/share/voice-commander/README.md")
-
-
-# -- Monitor alias defaults ---------------------------------------------------
-# Duplicated from settings._default_aliases to keep this module Qt-free.
-# If you change one, change the other.
-
-_NUMBER_WORDS = [
-    "one", "two", "three", "four", "five",
-    "six", "seven", "eight", "nine", "ten",
-]
-
-
-def _default_aliases(index_1based: int) -> list[str]:
-    """Generate default aliases for a monitor at 1-based index.
-    Vosk outputs phonetic text only, so numeric aliases are useless."""
-    if index_1based <= len(_NUMBER_WORDS):
-        word = _NUMBER_WORDS[index_1based - 1]
-        aliases = [f"monitor {word}"]
-        # Common Vosk mishearing: "two" -> "to"
-        if word == "two":
-            aliases.append("monitor to")
-        return aliases
-    return [f"monitor {index_1based}"]
 
 
 def _default_commands() -> list[dict]:
@@ -517,6 +495,38 @@ def _detect_on_monitor(heard: str) -> str | None:
     return None
 
 
+# -- Window class hint for queue tagging --------------------------------------
+
+def _wm_class_hint(cmd: dict) -> str:
+    """
+    Extract a window-class hint from a command for tagging placer queue entries.
+
+    Returns a lowercased executable basename (e.g. "waterfox-g", "dolphin") that
+    the placer script substring-matches against `window.resourceClass` on
+    `windowAdded`. Bidirectional substring matching handles cases like
+    executable "waterfox-g" vs resourceClass "waterfox", or executable
+    "dolphin" vs resourceClass "org.kde.dolphin".
+
+    Returns "" for actions that don't spawn a window (the placer treats an
+    empty tag as "matches anything", preserving head-of-queue behavior for
+    untagged entries).
+    """
+    action = cmd.get("action", "")
+    args = cmd.get("args", {})
+    if action == "launch_app":
+        raw = args.get("app", "")
+    elif action == "open_url":
+        # If no explicit browser is set, leave the tag empty -- the placer's
+        # empty-tag-matches-anything rule handles it.
+        raw = args.get("browser", "")
+    else:
+        return ""
+    if not raw:
+        return ""
+    # "/opt/waterfox/waterfox-g --new-tab" -> "waterfox-g"
+    return os.path.basename(raw.split()[0]).lower()
+
+
 # -- Single-segment scoring ---------------------------------------------------
 
 def _score_segment(heard: str) -> tuple[float, dict, dict, str | None] | None:
@@ -703,10 +713,14 @@ def _dispatch_with_monitor(cmd: dict, args: dict, target_output: str | None,
                            gui_env: dict, context) -> None:
     """
     Handle optional "on [alias]" monitor routing, then dispatch the command.
-    The placer script's queue self-drains via _queue.shift(); no clear needed.
+    The placer script's queue self-drains via splice; no clear needed.
+
+    Queue entries are written as "output:wm_class_hint" so the placer can
+    match arriving windows to the correct entry (see _wm_class_hint).
     """
     if target_output:
-        windows.write_next_screen(target_output, gui_env)
+        entry = f"{target_output}:{_wm_class_hint(cmd)}"
+        windows.write_next_screen(entry, gui_env)
         time.sleep(0.3)
         from core.listener import LOG_BUFFER as _log
         _log.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target_output}")
@@ -741,12 +755,20 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
     # -- Try chained commands first -------------------------------------------
     # Split on " and ", " an ", or " in " (common Vosk mishearings of "and").
     # Only accept the split if every segment matches a command.
+    #
+    # Two failure modes, handled differently:
+    #  - chain_ok=False: segments didn't all match (e.g. "open mind and body"
+    #    isn't really a chain). Fall through to single-match.
+    #  - chain_rejected=True: segments matched but a rule refused the chain
+    #    (confirm-required, cooldown, multi-URL cross-monitor). User intent
+    #    was clear; firing a partial match would be worse than nothing.
     chain_pattern = re.compile(r" and | an | in ", re.IGNORECASE)
     if chain_pattern.search(heard):
         segments = [s.strip() for s in chain_pattern.split(heard) if s.strip()]
         if len(segments) >= 2:
             matches = []
             chain_ok = True
+            chain_rejected = False
             for seg in segments:
                 result = _score_segment(seg)
                 if result is None:
@@ -756,7 +778,10 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                 # Don't allow confirm-required commands in chains
                 if cmd.get("confirm"):
                     print(f"[commands] Chain aborted: '{cmd['name']}' requires confirmation")
+                    from core.listener import LOG_BUFFER as _log
+                    _log.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' requires confirmation")
                     chain_ok = False
+                    chain_rejected = True
                     break
                 # Cooldown check per segment
                 cooldown = cmd.get("cooldown", DEFAULT_COOLDOWN)
@@ -764,29 +789,51 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                     last = _last_fired.get(cmd["name"], 0.0)
                     if time.time() - last < cooldown:
                         print(f"[commands] Chain aborted: '{cmd['name']}' on cooldown")
+                        from core.listener import LOG_BUFFER as _log
+                        _log.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' on cooldown")
                         chain_ok = False
+                        chain_rejected = True
                         break
                 matches.append((cmd, args, target))
 
-            # Don't chain multiple open_url commands -- they open as tabs
-            # in the same browser window and the second URL races with the
-            # first, often producing a blank tab. Chain app+url, app+app, etc.
+            # Two-or-more open_url commands targeting DIFFERENT monitors race in
+            # ways we can't fix (the browser may reuse an existing window, open
+            # a new one, or open new tabs depending on state). Same monitor --
+            # including both untargeted, both explicit-same, or one of each --
+            # is fine; the user is intentionally opening multiple tabs in one
+            # place. A distinct-targets check (set length > 1) catches all the
+            # ambiguous cases including "on mon1 and (no target)" since None
+            # and "DP-2" are distinct values.
             if chain_ok and matches:
-                url_count = sum(1 for cmd, _, _ in matches if cmd["action"] == "open_url")
-                if url_count >= 2:
-                    print("[commands] Chain aborted: multiple open_url commands")
+                url_targets = [target for cmd, _, target in matches if cmd["action"] == "open_url"]
+                if len(url_targets) >= 2 and len(set(url_targets)) > 1:
+                    print("[commands] Chain aborted: multiple open_url commands targeting different monitors")
+                    from core.listener import LOG_BUFFER as _log
+                    _log.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: multiple URLs targeting different monitors")
                     chain_ok = False
+                    chain_rejected = True
+
+            # Rule-rejected chains return immediately. The user's intent was
+            # two commands; we refused; firing one half via single-match
+            # fallback would be worse than firing nothing.
+            if chain_rejected:
+                return False
 
             if chain_ok and matches:
                 print(f"[commands] Chained {len(matches)} commands")
                 from core.listener import LOG_BUFFER as _log
                 _log.append(f"{datetime.now().strftime('%H:%M:%S')}  Chaining {len(matches)} commands")
 
-                # Build a queue of target monitors and write them all at once
-                # so the KWin placer script can consume one per windowAdded.
-                targets = [target for _, _, target in matches if target]
-                if targets:
-                    queue_str = ",".join(targets)
+                # Build a queue of "output:wm_class" entries so the KWin
+                # placer can match each arriving window to the correct
+                # entry by class -- not by head-of-queue order, which races
+                # with how fast each app maps its window (see _wm_class_hint).
+                entries = [
+                    f"{target}:{_wm_class_hint(cmd)}"
+                    for cmd, _, target in matches if target
+                ]
+                if entries:
+                    queue_str = ",".join(entries)
                     windows.write_next_screen(queue_str, gui_env)
 
                 for cmd, args, target in matches:
@@ -840,31 +887,10 @@ def dispatch_confirmed(gui_env: dict, context) -> None:
 if __name__ == "__main__":
 
     if len(sys.argv) == 2 and sys.argv[1] == "--emit-defaults":
-        # Slot-pinned rows are appended directly here (settings.py owns the
-        # canonical _PINNED_SLOT list, but we duplicate it to keep this script
-        # free of Qt imports). If you change one, change both.
-        pinned = [
-            {
-                "name": "set_volume",
-                "display_name": "Set Volume",
-                "phrases": ["set volume to {level}", "set it to {level}"],
-                "action": "set_volume",
-                "args": {},
-                "slots": {"level": {"fuzzy": False}},
-            },
-            {
-                "name": "move_to_monitor",
-                "display_name": "Move to Alias",
-                "phrases": ["move to {alias}"],
-                "action": "move_window_to_monitor",
-                "args": {},
-                "slots": {"alias": {"fuzzy": False}},
-            },
-        ]
         config = {
             "command_window": 5,
             "vosk_model": _DEFAULT_VOSK_MODEL_NAME,
-            "commands": _default_commands() + pinned,
+            "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],
             "wake_words": ["computer", "hey dude"],
             "monitors": {},
             "open_mic_phrases": ["open mic", "open mike", "open microphone"],

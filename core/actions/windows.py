@@ -28,12 +28,19 @@ import re
 import subprocess
 from difflib import SequenceMatcher
 
+from core.edid import get_monitor_friendly_names
+
 
 CONFIG_PATH = os.path.expanduser("~/.config/voice-commander/commands.json")
 
 # Cached output-name -> KWin screen index mapping.
 # Built by refresh_monitor_map() at startup and on config reload.
 _output_to_screen: dict[str, int] = {}
+
+# Cached output-name -> friendly label (EDID Display Product Name).
+# Built alongside _output_to_screen so both refresh in lockstep. Used only
+# by the settings UI; runtime alias resolution uses output names directly.
+_monitor_details: dict[str, str] = {}
 
 
 def refresh_monitor_map(gui_env: dict) -> None:
@@ -79,6 +86,17 @@ def refresh_monitor_map(gui_env: dict) -> None:
     _output_to_screen = new_map
     print(f"[windows] Monitor map: {_output_to_screen}")
 
+    # Friendly names from EDID. Isolated try/except: if edid-decode is missing
+    # or /sys/class/drm is unreadable, the alias map stays valid and we just
+    # don't show friendly names. UI falls back to port names alone.
+    global _monitor_details
+    try:
+        _monitor_details = get_monitor_friendly_names()
+        print(f"[windows] Monitor details: {_monitor_details}")
+    except Exception as e:
+        print(f"[windows] get_monitor_friendly_names failed: {e}")
+        _monitor_details = {}
+
 
 def get_connected_outputs() -> list[dict]:
     """
@@ -89,6 +107,18 @@ def get_connected_outputs() -> list[dict]:
         {"name": name, "index": idx}
         for name, idx in sorted(_output_to_screen.items(), key=lambda x: x[1])
     ]
+
+
+def get_monitor_details() -> dict[str, str]:
+    """
+    Return {output_name: friendly_label} from EDID, populated by the most
+    recent refresh_monitor_map() call. Used by the Displays settings tab
+    to render a human-readable label alongside the port name.
+
+    Returns an empty dict if EDID parsing failed or refresh_monitor_map()
+    hasn't run yet. Callers should fall back to port names alone.
+    """
+    return dict(_monitor_details)
 
 
 def write_next_screen(output_name: str, gui_env: dict) -> None:

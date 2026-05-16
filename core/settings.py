@@ -64,7 +64,7 @@ from core.aliases import (
     PINNED_SLOT as _PINNED_SLOT,
     default_aliases as _default_aliases,
 )
-from core.actions.windows import get_connected_outputs
+from core.actions.windows import get_connected_outputs, get_monitor_details
 from core.env import GUI_ENV
 
 
@@ -956,7 +956,7 @@ class MonitorRow(QWidget):
 
     dirtied = Signal()
 
-    def __init__(self, output_name: str, aliases: list[str], parent=None):
+    def __init__(self, output_name: str, friendly_name: str, aliases: list[str], parent=None):
         super().__init__(parent)
         self._output_name = output_name
         self._expanded    = False
@@ -970,15 +970,34 @@ class MonitorRow(QWidget):
         h.setContentsMargins(6, 4, 6, 4)
         h.setSpacing(6)
 
-        name_lbl = QLabel(output_name)
-        name_lbl.setStyleSheet("font-weight: bold;")
-        name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Stacked labels: friendly EDID name on top (bold), port name underneath
+        # (small, dim) as the stable identifier that disambiguates duplicate
+        # models. If friendly_name is empty (no EDID data for this output),
+        # show only the port name as primary so we don't regress.
+        name_box = QVBoxLayout()
+        name_box.setContentsMargins(0, 0, 0, 0)
+        name_box.setSpacing(0)
+        if friendly_name:
+            primary_lbl = QLabel(friendly_name)
+            primary_lbl.setStyleSheet("font-weight: bold;")
+            secondary_lbl = QLabel(output_name)
+            secondary_lbl.setStyleSheet("color: #a6adc8; font-size: 8pt;")
+            name_box.addWidget(primary_lbl)
+            name_box.addWidget(secondary_lbl)
+        else:
+            primary_lbl = QLabel(output_name)
+            primary_lbl.setStyleSheet("font-weight: bold;")
+            name_box.addWidget(primary_lbl)
+
+        name_wrap = QWidget()
+        name_wrap.setLayout(name_box)
+        name_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self._expand_btn = QPushButton("Aliases")
         self._expand_btn.setFixedWidth(82)
         self._expand_btn.clicked.connect(self._toggle_expand)
 
-        h.addWidget(name_lbl)
+        h.addWidget(name_wrap)
         h.addWidget(self._expand_btn)
         outer.addWidget(header)
 
@@ -1313,6 +1332,7 @@ class SettingsDialog(QDialog):
         mf_layout.setSpacing(0)
 
         existing_monitor_cfg: dict = self._config.get("monitors", {})
+        monitor_details = get_monitor_details()
         if not self._monitors:
             mf_layout.addWidget(QLabel("No connected monitors detected."))
         else:
@@ -1322,7 +1342,8 @@ class SettingsDialog(QDialog):
                     aliases = _default_aliases(i + 1)
                 if i > 0:
                     mf_layout.addWidget(_h_rule())
-                row = MonitorRow(m["name"], aliases)
+                friendly = monitor_details.get(m["name"], "")
+                row = MonitorRow(m["name"], friendly, aliases)
                 self._monitor_rows.append(row)
                 mf_layout.addWidget(row)
         cl.addWidget(monitor_frame)

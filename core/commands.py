@@ -853,6 +853,26 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                         break
                 matches.append((cmd, args, target))
 
+            # Trailing-target propagation. When only the LAST segment carries
+            # an explicit "on {alias}" and every earlier segment is untargeted,
+            # distribute the trailing target backward across all prior
+            # segments. Matches English grammar: "open A and open B on
+            # monitor one" reads as "open both on monitor one". Propagation
+            # happens BEFORE the cross-monitor URL check so the check sees
+            # the resolved targets. Applies to all action types, not just
+            # open_url -- "launch dolphin and open reddit on monitor one"
+            # naturally means both land on monitor one.
+            if chain_ok and len(matches) >= 2:
+                last_target = matches[-1][2]
+                earlier_targets = [t for _, _, t in matches[:-1]]
+                if last_target is not None and all(t is None for t in earlier_targets):
+                    matches = [
+                        (cmd, args, last_target) for cmd, args, _ in matches[:-1]
+                    ] + [matches[-1]]
+                    print(f"[commands] Trailing target '{last_target}' propagated to {len(matches) - 1} prior segment(s)")
+                    from core.listener import LOG_BUFFER as _log
+                    _log.append(f"{datetime.now().strftime('%H:%M:%S')}  Trailing target propagated: all segments -> {last_target}")
+
             # Two-or-more open_url commands targeting DIFFERENT monitors race in
             # ways we can't fix (the browser may reuse an existing window, open
             # a new one, or open new tabs depending on state). Same monitor --

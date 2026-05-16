@@ -153,17 +153,23 @@ companion — keep them in sync.
 - **Don't:** Reject same-monitor URL chains. Loosen this rule
   without redesigning `apps.open_url` to force-new-window.
 
-### Trailing-target distribution — DESIGN INTENT, NOT YET IMPLEMENTED
-- **What:** When a chain has multiple segments but only the last
-  carries `on {alias}`, the target should distribute backward
-  across all prior segments (English-grammar default). E.g.
-  `open reddit and open youtube on monitor one` should fire both
-  URLs targeting monitor one.
-- **Status:** Not implemented. Current behavior trips the
-  cross-monitor URL rule and rejects. Fix lives in the chain
-  parser, not the rule.
-- **Don't:** Fix by loosening the cross-monitor URL rule — that
-  rule is correct.
+### Trailing-target distribution across chained segments
+- **What:** When a chain's last segment carries `on {alias}` and
+  every earlier segment is untargeted, the trailing target
+  distributes backward across all prior segments (English-grammar
+  default). E.g. `open reddit and open youtube on monitor one`
+  fires both URLs targeting monitor one. Applies to all action
+  types, not just `open_url` — `launch dolphin and open reddit on
+  monitor two` works the same way.
+- **Where:** `try_match()` in `core/commands.py`, after segment
+  match assembly and **before** the cross-monitor URL check, so
+  the check sees resolved targets.
+- **Guard:** Propagation only fires when earlier segments are all
+  untargeted. Mixed chains like `open reddit on monitor one and
+  open youtube on monitor two` are left alone and still trip the
+  cross-monitor URL rule as designed.
+- **Don't:** Fix unrelated chain bugs by loosening the
+  cross-monitor URL rule — that rule is correct and load-bearing.
 
 ### Save path: dedup, config refresh, symlink-aware
 - **What:** `_save()` merges UI commands (`collect()`, which already

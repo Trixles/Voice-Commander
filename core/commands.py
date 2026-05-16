@@ -56,6 +56,8 @@ ACTION_REGISTRY: dict[str, Any] = {
     "volume_up":              system.volume_up,
     "volume_down":            system.volume_down,
     "set_volume":             system.set_volume,
+    "mute":                   system.mute,
+    "unmute":                 system.unmute,
     "media_pause":            system.media_pause,
     "media_resume":           system.media_resume,
     "shutdown":               system.shutdown,
@@ -206,6 +208,20 @@ def _default_commands() -> list[dict]:
         "display_name": "Volume down",
         "phrases": ["volume down", "turn it down"],
         "action": "volume_down",
+        "args": {},
+    })
+    commands.append({
+        "name": "mute",
+        "display_name": "Mute",
+        "phrases": ["mute", "mute audio", "mute volume"],
+        "action": "mute",
+        "args": {},
+    })
+    commands.append({
+        "name": "unmute",
+        "display_name": "Unmute",
+        "phrases": ["unmute", "unmute audio", "unmute volume"],
+        "action": "unmute",
         "args": {},
     })
     commands.append({
@@ -662,6 +678,10 @@ def _build_notification(action_name: str, cmd: dict, merged: dict, gui_env: dict
         return f"Volume up ({_get_current_volume(gui_env)})"
     elif action_name == "volume_down":
         return f"Volume down ({_get_current_volume(gui_env)})"
+    elif action_name == "mute":
+        return "Muted"
+    elif action_name == "unmute":
+        return "Unmuted"
     elif action_name == "media_pause":
         return "Media paused"
     elif action_name == "media_resume":

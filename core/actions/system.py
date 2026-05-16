@@ -78,6 +78,22 @@ def set_volume(level: str, gui_env: dict, context=None) -> None:
     )
 
 
+def mute(gui_env: dict, context=None) -> None:
+    """Mute the default sink unconditionally."""
+    subprocess.run(
+        ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"],
+        env=gui_env,
+    )
+
+
+def unmute(gui_env: dict, context=None) -> None:
+    """Unmute the default sink unconditionally."""
+    subprocess.run(
+        ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"],
+        env=gui_env,
+    )
+
+
 # -- Media --------------------------------------------------------------------
 
 def media_pause(gui_env: dict, context=None) -> None:

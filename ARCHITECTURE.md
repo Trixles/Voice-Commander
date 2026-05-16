@@ -44,10 +44,44 @@ companion — keep them in sync.
   boundaries on trailing slots.
 - **Don't:** Revert to unconditional `.+?`.
 
-### Vosk normalization for common mishearings lives in `listener.py`
-- **What:** `_normalize()` rewrites known mishearings before
-  matching. Authoritative list is in the function body.
-- **Don't:** Remove entries without auditing dependent commands.
+### Vosk normalization split: hallucination filter vs user overrides
+- **What:** Two separate, sequential rewrites of Vosk transcripts
+  before matching, in this order:
+  1. `_normalize()` in `core/listener.py` — hallucination filter for
+     mic AGC artifacts the user never said. Currently a single rule
+     (strip leading `"the "`). Plumbing, not user-facing.
+  2. `apply_overrides()` in `core/overrides.py` — user-configurable
+     mishearing rewrites (Vosk heard X, user meant Y). Defaults from
+     `DEFAULT_OVERRIDES` plus user-added rules from
+     `commands.json["overrides"]`, in that order.
+- **Why:** Categorically different mechanisms. AGC hallucinations
+  are noise artifacts; mishearings are recognition errors. Mixing
+  them in one place either exposes plumbing to the user (confusing)
+  or hides legitimate rewrites the user should see (opaque).
+- **Don't:** Move `"the "` strip into `DEFAULT_OVERRIDES` —
+  exposing it as a deletable-looking rule mismodels its mechanism.
+  Move user-facing rewrites back into `_normalize()` — they belong
+  in the user-data layer, not the plumbing layer.
+
+### Precision-vs-recall split in the matching pipeline
+- **What:** Overrides handle precision (deterministic, user-owned
+  rewrites for consistent observable mishearings). Fuzzy matcher
+  handles recall (forgives minor near-misses automatically).
+  Together they form the matching pipeline; alone neither is
+  sufficient.
+- **Why:** A loose fuzzy matcher fires wrong commands on shared
+  prefixes (the 0.3.0 "open like" vs "open plex" problem). A
+  strict matcher rejects plausible Vosk garbles unless the user has
+  a rewrite for them. The split lets the matcher stay conservative
+  (TAIL_THRESHOLD guard, etc.) while overrides cover the gray zone
+  the user notices and wants to fix.
+- **Goal:** Both work invisibly for the median user. Overrides are
+  an emergency valve, not an expectation. Default overrides ship
+  to cover the mishearings every user will hit.
+- **Don't:** Loosen the matcher on the theory that overrides will
+  catch the fallout — that inverts the split. Add matcher-side
+  workarounds for individual mishearing patterns — those are
+  override material.
 
 ### Non-slot matcher applies a tail-rescore guard
 - **What:** `_match_non_slot()` in `commands.py` computes the full

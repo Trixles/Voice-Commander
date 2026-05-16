@@ -35,6 +35,7 @@ import vosk
 from core.context import Context, State
 from core.wake import WakeWordDetector
 import core.commands as commands
+import core.overrides as overrides
 
 
 # -- Built-in phrase sets -----------------------------------------------------
@@ -153,21 +154,19 @@ def wait_for_mic_ready(source: str, timeout: int = 10) -> bool:
 # -- Built-in phrase checks ---------------------------------------------------
 
 def _normalize(text: str) -> str:
-    """Normalize common Vosk mishearings before any matching occurs.
+    """Hallucination filter for Vosk transcriptions, applied before matching.
 
-    The leading 'the ' strip is a hard block: Vosk hallucinates 'the' as a prefix
-    on transcripts when background noise is present (especially with mics that
-    have onboard AGC like the ReSpeaker XVF3800). Consequence: command phrases
-    cannot start with 'the' -- they will be silently stripped before matching.
+    Currently a single rule: strip a leading 'the ', which some mics with
+    onboard AGC (notably the ReSpeaker XVF3800) hallucinate from background
+    noise. Consequence: command phrases cannot start with 'the' -- they
+    will be silently stripped before matching.
+
+    User-configurable mishearing rewrites live in core/overrides.py and are
+    applied separately by the listener loop after this function runs. The
+    split is intentional: hallucination filters are plumbing for artifacts
+    the user never said; overrides are 'Vosk heard X, user meant Y'.
     """
-    text = text.removeprefix("the ")
-    text = text.replace("moved to ", "move to ")
-    text = text.replace("up and ", "open ")
-    text = text.replace("hope in ", "open ")
-    text = text.replace("oh been ", "open ")
-    text = text.replace("cause ", "close ")
-    text = text.replace("mike", "microphone")
-    return text
+    return text.removeprefix("the ")
 
 
 def _is_open_mic_command(text: str) -> bool:
@@ -307,6 +306,7 @@ def run_listener(
             continue
 
         text = _normalize(text)
+        text = overrides.apply_overrides(text, commands.get_overrides())
         print(f"[listener] Heard ({context.state.value}): {text}")
         LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  [{context.state.value}]  {text}")
 

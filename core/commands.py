@@ -36,6 +36,7 @@ from typing import Any
 
 from core.actions import apps, system, windows
 from core.aliases import PINNED_SLOT, default_aliases as _default_aliases
+from core.overrides import DEFAULT_OVERRIDES
 
 
 # -- Notify helper ------------------------------------------------------------
@@ -399,6 +400,18 @@ def get_close_mic_phrases() -> set[str]:
         return {p.lower().strip() for p in phrases}
     from core.listener import CLOSE_MIC_PHRASES
     return CLOSE_MIC_PHRASES
+
+
+def get_overrides() -> list[dict]:
+    """Return the full ordered list of overrides to apply.
+    Defaults come first; user-added rules from commands.json follow.
+    Users cannot disable a default, but can shadow one by adding a
+    user rule with the same pattern (later rules apply to text already
+    rewritten by earlier rules)."""
+    user = _config.get("overrides", [])
+    if not isinstance(user, list):
+        user = []
+    return list(DEFAULT_OVERRIDES) + user
 
 
 _DEFAULT_VOSK_MODEL_DIR  = os.path.expanduser("~/.local/share/voice-commander/vosk-model/")
@@ -972,6 +985,7 @@ if __name__ == "__main__":
             "monitors": {},
             "open_mic_phrases": ["open mic", "open mike", "open microphone"],
             "close_mic_phrases": ["close mic", "close mike", "close microphone"],
+            "overrides": [],
         }
         json.dump(config, sys.stdout, indent=2)
         sys.stdout.write("\n")

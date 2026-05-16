@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] &mdash; 2026-05-16
+
+### Added
+- Mute and unmute system commands (default phrases: "mute", "unmute",
+  plus "audio"/"volume" variants). Uses `pactl set-sink-mute` on the
+  default sink.
+- Friendly monitor names in the Displays tab, parsed from EDID via
+  `edid-decode`. Falls back to port name when no display product name
+  is present in the descriptor.
+- `ARCHITECTURE.md` &mdash; durable invariants extracted from
+  `HANDOFF.md` and committed to the repo. Internal documentation.
+
+### Changed
+- Non-slot fuzzy matcher now applies a tail-rescore guard: when the
+  heard text and a candidate phrase share their leading word
+  (e.g. `open ...`), the remainder of each is scored separately and
+  must clear a secondary threshold. Stops shared verb prefixes from
+  carrying structurally weak matches above the main threshold.
+
+## [0.2.0] &mdash; 2026-05-15
+
+### Fixed
+- KWin window-placer script is now reloaded via the `Scripting` D-Bus
+  interface (`unloadScript` then `loadScript`) instead of
+  `org.kde.KWin.reconfigure`. In current Plasma 6, `reconfigure` only
+  refreshes KWin's own cached config and does not re-execute user
+  scripts &mdash; the placer was reading a stale `nextScreen` value
+  (or none at all), causing `open X on Y` to land windows on the
+  wrong monitor.
+- Chained `open X on Y and open Z on W` placement now uses
+  `output:wm_class` queue entries instead of bare output names.
+  Previously the placer matched windows in the order they mapped to
+  the screen, which races with how fast each app spawns its window;
+  class-tagging makes the match order-independent.
+- URL chains targeting different monitors are now rejected at the
+  parser level rather than fired with unpredictable results.
+- Two small fixes to the service startup path.
+
+### Changed
+- Aliases (default monitor aliases, slot-pinned command definitions,
+  number-word mappings) consolidated into `core/aliases.py`. Internal
+  refactor; no user-visible behaviour change.
+
 ## [0.1.0] &mdash; 2026-05-10
 
 Initial public release.
@@ -56,5 +99,7 @@ Initial public release.
   affects any external tool trying to place these browsers. Workaround:
   open the browser first, then use `"move to {monitor}"` to relocate it.
 
-[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Trixles/Voice-Commander/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Trixles/Voice-Commander/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Trixles/Voice-Commander/releases/tag/v0.1.0

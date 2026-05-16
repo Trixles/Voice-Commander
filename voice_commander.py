@@ -13,7 +13,7 @@ core modules can import it without creating a circular dependency.
 All logic lives in core/. This file is intentionally thin.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import os
 import queue

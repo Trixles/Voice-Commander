@@ -52,7 +52,9 @@ import re
 import subprocess
 
 from PySide6.QtCore import Qt, QSortFilterProxyModel, QSize, QTimer, Signal
-from PySide6.QtGui import QFont, QIcon, QStandardItem, QStandardItemModel
+from PySide6.QtGui import (
+    QClipboard, QFont, QGuiApplication, QIcon, QStandardItem, QStandardItemModel,
+)
 from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QComboBox, QListView, QMessageBox, QPlainTextEdit, QPushButton,
@@ -1438,6 +1440,12 @@ class SettingsDialog(QDialog):
             "background-color: #11111b; "
             "border: 1px solid #45475a; border-radius: 4px; padding: 6px;"
         )
+        # Wayland workaround: read-only QTextEdit doesn't auto-populate the
+        # PRIMARY selection clipboard, and the 500ms refresh wipes any
+        # active selection. Mirror selections to PRIMARY ourselves and pause
+        # the refresh while a selection is held.
+        self._log_selection_active = False
+        self._log_view.selectionChanged.connect(self._on_log_selection_changed)
         cl.addWidget(self._log_view)
 
         # Seed with any existing buffer content.
@@ -1460,6 +1468,11 @@ class SettingsDialog(QDialog):
         return tab
 
     def _poll_log(self) -> None:
+        # Don't repaint while the user has text selected — setHtml() would
+        # wipe the selection mid-copy. New lines accumulate in LOG_BUFFER
+        # and surface on the next tick after deselection.
+        if self._log_selection_active:
+            return
         from core.listener import LOG_BUFFER
         current = tuple(LOG_BUFFER)
         if current == self._last_log_snapshot:
@@ -1470,6 +1483,17 @@ class SettingsDialog(QDialog):
         self._log_view.verticalScrollBar().setValue(
             self._log_view.verticalScrollBar().maximum()
         )
+
+    def _on_log_selection_changed(self) -> None:
+        cursor = self._log_view.textCursor()
+        if cursor.hasSelection():
+            self._log_selection_active = True
+            # QTextEdit returns paragraph separators (U+2029) instead of \n
+            # in selectedText(); normalize so middle-click paste is sane.
+            text = cursor.selectedText().replace("\u2029", "\n")
+            QGuiApplication.clipboard().setText(text, QClipboard.Mode.Selection)
+        else:
+            self._log_selection_active = False
 
     def _clear_log(self) -> None:
         """Clear the log view and the underlying buffer."""

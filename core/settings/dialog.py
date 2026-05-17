@@ -59,16 +59,15 @@ import os
 import re
 import subprocess
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QClipboard, QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QTabWidget, QTextEdit,
-    QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from core.commands import (
-    ACTION_REGISTRY, get_vosk_model_path, _default_commands,
+    get_vosk_model_path, _default_commands,
     DEFAULT_OPEN_MIC_PHRASES as _DEFAULT_OPEN_MIC_PHRASES,
     DEFAULT_CLOSE_MIC_PHRASES as _DEFAULT_CLOSE_MIC_PHRASES,
 )
@@ -83,37 +82,15 @@ from core.settings.style import STYLESHEET
 from core.settings.tabs.commands_tab import build as build_commands_tab
 from core.settings.tabs.overrides_tab import build as build_overrides_tab
 from core.settings.tabs.displays_tab import MonitorRow, build as build_displays_tab
+from core.settings.tabs.open_mic_tab import build as build_open_mic_tab
+from core.settings.tabs.model_tab import build as build_model_tab
+from core.settings.tabs.log_tab import build as build_log_tab, _colorize_log_line
+from core.settings.tabs.about_tab import build as build_about_tab
 from core.settings.helpers import (
     _HIDDEN_COMMANDS,
     VOSK_MODELS_DIR,
     _load_config, _write_config,
-    _section_label, _h_rule,
 )
-
-
-# -- Log color coding ---------------------------------------------------------
-
-def _colorize_log_line(line: str) -> str:
-    """Wrap a log line in an HTML span with a color based on its content."""
-    import html
-    escaped = html.escape(line)
-    if ">>" in line:
-        color = "#a6e3a1"   # green -- command dispatched
-    elif "!!" in line:
-        color = "#fab387"   # orange -- command not configured / warning
-    elif "No match" in line:
-        color = "#f38ba8"   # red -- no match
-    elif "Wake word" in line or "Open mic" in line:
-        color = "#89dceb"   # cyan -- state change
-    elif "command received" in line or "Confirm" in line or "Cancel" in line or "timed out" in line:
-        color = "#f9e2af"   # yellow -- confirmation flow
-    elif "Target monitor" in line:
-        color = "#cba6f7"   # purple -- monitor routing
-    elif "Chaining" in line:
-        color = "#b4befe"   # royal purple -- command chaining
-    else:
-        color = "#7f849c"   # gray -- heard text
-    return f'<span style="color:{color}">{escaped}</span>'
 
 
 # -- Main dialog --------------------------------------------------------------
@@ -245,69 +222,7 @@ class SettingsDialog(QDialog):
         return tab, cl
 
     def _build_model_tab(self) -> QWidget:
-        tab, cl = self._make_scroll_tab()
-        cl.addWidget(_section_label("Model"))
-
-        model_blurb = QLabel(
-            "Voice interpretation is powered by Vosk. You can choose which model to use below."
-        )
-        model_blurb.setWordWrap(True)
-        model_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
-        cl.addWidget(model_blurb)
-
-        cl.addWidget(_h_rule())
-
-        # -- Current model path display + browse button -----------------------
-        path_row = QWidget()
-        pr = QHBoxLayout(path_row)
-        pr.setContentsMargins(4, 0, 4, 0)
-        pr.setSpacing(8)
-
-        self._model_path_label = QLabel()
-        self._model_path_label.setWordWrap(True)
-        self._model_path_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._model_path_label.setStyleSheet(
-            "background-color: #282839; color: #cdd6f4; font-size: 9pt; "
-            "border: 1px solid #45475a; border-radius: 4px; padding: 4px 6px;"
-        )
-
-        try:
-            current_path = get_vosk_model_path()
-        except ValueError:
-            current_path = self._config.get("vosk_model", "")
-        self._model_path_label.setText(current_path or "(using default)")
-        self._selected_model_path: str = current_path
-
-        browse_btn = QPushButton("Browse...")
-        browse_btn.setFixedWidth(90)
-        browse_btn.clicked.connect(self._browse_vosk_model)
-        pr.addWidget(self._model_path_label)
-        pr.addWidget(browse_btn)
-        cl.addWidget(path_row)
-
-        self._model_error_label = QLabel()
-        self._model_error_label.setWordWrap(True)
-        self._model_error_label.setStyleSheet(
-            "color: #f38ba8; font-size: 9pt; font-style: italic; "
-            "background-color: #2a1a1a; border: 1px solid #6c1a1a; "
-            "border-radius: 4px; padding: 4px 6px;"
-        )
-        self._model_error_label.setVisible(False)
-        cl.addWidget(self._model_error_label)
-
-        cl.addSpacing(12)
-
-        dl_blurb = QLabel(
-            'Download models:<br><a href="https://alphacephei.com/vosk/models" '
-            'style="color: #89b4fa;">alphacephei.com/vosk/models</a>'
-        )
-        dl_blurb.setWordWrap(True)
-        dl_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px;")
-        dl_blurb.setOpenExternalLinks(True)
-        cl.addWidget(dl_blurb)
-
-        cl.addStretch()
-        return tab
+        return build_model_tab(self)
 
     def _browse_vosk_model(self) -> None:
         chosen = QFileDialog.getExistingDirectory(
@@ -335,49 +250,7 @@ class SettingsDialog(QDialog):
         print(f"[settings] Vosk model selected: {chosen}")
 
     def _build_about_tab(self) -> QWidget:
-        tab, cl = self._make_scroll_tab()
-        cl.addWidget(_section_label("How to Use"))
-        how_blurb = QLabel(
-            "Voice Commander runs in the background and listens for a wake word. "
-            "When it hears one, it listens for commands for 5 seconds; if it hears one of the phrases "
-            "that match a command, it performs the corresponding action.\n\n"
-            "Use the Commands tab to set your wake word(s), add custom commands, edit their phrases, "
-            "and choose which action each command performs.\n\n"
-            "The Displays tab lets you assign \"aliases\" to your displays, so you can quickly move windows "
-            "with voice commands (\"move left\", \"move right\", \"move to [alias]\").\n\n"
-            "Open Mic mode listens to ALL commands without requiring a wake word. Left-click the tray "
-            "icon to toggle Open Mic mode on or off. Use the Open Mic tab to edit phrases for toggling "
-            "Open Mic mode.\n\n"
-            "The Model tab lets you choose which model to use for speech interpretation. Voice Commander "
-            "was designed to be as lightweight as possible, so I recommend using the small model, but "
-            "I've left the option open. The small model is not as accurate, but is generally good enough, "
-            "and it uses practically zero CPU/RAM.\n\n"
-            "The Log tab shows what is being heard by the interpreter. If it consistently mishears any of "
-            "your command phrases, you can just add whatever the \"misheard phrase\" is to that Command's "
-            "phrases list.\n\n"
-            "Is it the sexiest, cleanest thing ever?\n\n"
-            "No. No, it's not.\n\n"
-            "Does it totally work if you take like 5 mins to set up the phrases right, and then use basically "
-            "no system overhead?\n\n"
-            "Yes, yes it does!\n\n"
-            ";)"
-        )
-        how_blurb.setWordWrap(True)
-        how_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
-        cl.addWidget(how_blurb)
-
-        # Version footer. Pinned right above the trailing stretch so it sits
-        # at the bottom of the tab's content area regardless of blurb length.
-        from core import __version__ as _vc_version
-        version_lbl = QLabel(f"Voice Commander {_vc_version}")
-        version_lbl.setStyleSheet(
-            "color: #6c7086; font-size: 8pt; font-style: italic; padding: 8px 4px 0 4px;"
-        )
-        version_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        cl.addWidget(version_lbl)
-
-        cl.addStretch()
-        return tab
+        return build_about_tab(self)
 
     def _build_commands_tab(self) -> QWidget:
         return build_commands_tab(self)
@@ -389,117 +262,10 @@ class SettingsDialog(QDialog):
         return build_displays_tab(self)
 
     def _build_open_mic_tab(self) -> QWidget:
-        tab, cl = self._make_scroll_tab()
-        cl.addWidget(_section_label("Open Mic"))
-        open_mic_blurb = QLabel(
-            "Toggle Open Mic mode by left-clicking the tray icon, or by saying a phrase from the list below."
-        )
-        open_mic_blurb.setWordWrap(True)
-        open_mic_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
-        cl.addWidget(open_mic_blurb)
-        cl.addWidget(_h_rule())
-
-        open_lbl = QLabel("Open Mic phrases (comma-separated):")
-        open_lbl.setStyleSheet("font-weight: bold; font-size: 9pt;")
-        cl.addWidget(open_lbl)
-
-        self._open_mic_edit = QPlainTextEdit()
-        self._open_mic_edit.setFixedHeight(72)
-        self._open_mic_edit.setPlaceholderText("open mic, enable open mic, always listen")
-        existing_open = self._config.get("open_mic_phrases")
-        if isinstance(existing_open, list) and existing_open:
-            self._open_mic_edit.setPlainText(", ".join(existing_open))
-        else:
-            self._open_mic_edit.setPlainText(", ".join(_DEFAULT_OPEN_MIC_PHRASES))
-        cl.addWidget(self._open_mic_edit)
-
-        cl.addSpacing(12)
-
-        close_lbl = QLabel("Close Mic phrases (comma-separated):")
-        close_lbl.setStyleSheet("font-weight: bold; font-size: 9pt;")
-        cl.addWidget(close_lbl)
-
-        self._close_mic_edit = QPlainTextEdit()
-        self._close_mic_edit.setFixedHeight(72)
-        self._close_mic_edit.setPlaceholderText("close mic, disable open mic, stop listening")
-        existing_close = self._config.get("close_mic_phrases")
-        if isinstance(existing_close, list) and existing_close:
-            self._close_mic_edit.setPlainText(", ".join(existing_close))
-        else:
-            self._close_mic_edit.setPlainText(", ".join(_DEFAULT_CLOSE_MIC_PHRASES))
-        cl.addWidget(self._close_mic_edit)
-        cl.addStretch()
-        return tab
+        return build_open_mic_tab(self)
 
     def _build_log_tab(self) -> QWidget:
-        tab, cl = self._make_scroll_tab()
-        cl.addWidget(_section_label("Logging"))
-        log_blurb = QLabel(
-            "This log tracks what is actually heard by the interpreter. "
-            "If the interpreter is consistently mishearing a command's phrase as something else, "
-            "add that as a phrase for the command, and then it will activate even when it mishears you."
-        )
-        log_blurb.setWordWrap(True)
-        log_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
-        cl.addWidget(log_blurb)
-
-        legend_html = (
-            "<table style='font-size:8pt; color:#cdd6f4; border-spacing:4px;'>"
-            "<tr><td><span style='color:#a6e3a1'>&#9632;</span></td><td>Command matched&nbsp;&nbsp;</td>"
-            "<td><span style='color:#fab387'>&#9632;</span></td><td>Command not configured</td></tr>"
-            "<tr><td><span style='color:#f38ba8'>&#9632;</span></td><td>No match&nbsp;&nbsp;</td>"
-            "<td><span style='color:#89dceb'>&#9632;</span></td><td>State change</td></tr>"
-            "<tr><td><span style='color:#f9e2af'>&#9632;</span></td><td>Confirmation&nbsp;&nbsp;</td>"
-            "<td><span style='color:#cba6f7'>&#9632;</span></td><td>Monitor routing</td></tr>"
-            "<tr><td><span style='color:#b4befe'>&#9632;</span></td><td>Chaining&nbsp;&nbsp;</td>"
-            "<td><span style='color:#7f849c'>&#9632;</span></td><td>Heard text</td></tr>"
-            "</table>"
-        )
-        legend = QLabel(legend_html)
-        legend.setTextFormat(Qt.TextFormat.RichText)
-        legend.setStyleSheet("padding: 2px 4px 6px 4px;")
-        cl.addWidget(legend, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        clear_btn = QPushButton("Clear Log")
-        clear_btn.setFixedWidth(90)
-        clear_btn.clicked.connect(self._clear_log)
-        cl.addWidget(clear_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        self._log_view = QTextEdit()
-        self._log_view.setReadOnly(True)
-        self._log_view.setMinimumHeight(300)
-        self._log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._log_view.setStyleSheet(
-            "font-family: monospace; font-size: 9pt; "
-            "background-color: #11111b; "
-            "border: 1px solid #45475a; border-radius: 4px; padding: 6px;"
-        )
-        # Wayland workaround: read-only QTextEdit doesn't auto-populate the
-        # PRIMARY selection clipboard, and the 500ms refresh wipes any
-        # active selection. Mirror selections to PRIMARY ourselves and pause
-        # the refresh while a selection is held.
-        self._log_selection_active = False
-        self._log_view.selectionChanged.connect(self._on_log_selection_changed)
-        cl.addWidget(self._log_view)
-
-        # Seed with any existing buffer content.
-        from core.log_buffer import LOG_BUFFER
-        self._last_log_snapshot = tuple(LOG_BUFFER)
-        if self._last_log_snapshot:
-            html_lines = [_colorize_log_line(line) for line in self._last_log_snapshot]
-            self._log_view.setHtml("<br>".join(html_lines))
-            self._log_view.verticalScrollBar().setValue(
-                self._log_view.verticalScrollBar().maximum()
-            )
-
-        # Poll the buffer every 500ms to pick up new lines.
-        self._log_timer = QTimer()
-        self._log_timer.setInterval(500)
-        self._log_timer.timeout.connect(self._poll_log)
-        self._log_timer.start()
-
-        cl.addStretch()
-        return tab
+        return build_log_tab(self)
 
     def _poll_log(self) -> None:
         # Don't repaint while the user has text selected — setHtml() would

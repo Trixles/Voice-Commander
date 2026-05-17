@@ -121,6 +121,24 @@ companion — keep them in sync.
   `_default_commands()` used by installer and Restore Defaults.
 - **Don't:** Hardcode defaults in `install.sh`.
 
+### Default mic phrases live in `commands.py`, not `settings.py` or `listener.py`
+- **What:** `DEFAULT_OPEN_MIC_PHRASES` / `DEFAULT_CLOSE_MIC_PHRASES`
+  are module-level constants in `core/commands.py`.
+  `_default_commands()` embeds them in `--emit-defaults` output.
+  `settings.py` imports them as `_DEFAULT_*` aliases for the Restore
+  Defaults buttons and for synthesizing missing keys on load.
+  `listener.py` reads runtime values via
+  `commands.get_open_mic_phrases()` / `get_close_mic_phrases()` —
+  no hardcoded fallback in the listener.
+- **Why:** Single source of truth. Pre-Tier-1, `settings.py` had
+  3-phrase defaults and `listener.py` had a 6-phrase fallback — they
+  drifted, so a user's Restore Defaults produced different behavior
+  than a fresh install.
+- **Don't:** Add a fallback constant in `listener.py`. Move the
+  canonical constants to `settings.py` — that re-couples defaults
+  to Qt and breaks `python -m core.commands --emit-defaults`, which
+  `install.sh` runs without PySide6 available.
+
 ### Save button: dirty-tracked, not always-on
 - **What:** Save starts disabled. A `dirtied` Qt Signal on
   `CommandRow`, `CommandsContainer`, and `MonitorRow` bubbles to
@@ -220,9 +238,14 @@ companion — keep them in sync.
 - **Don't:** Add a visibility filter.
 
 ### LOG_BUFFER quirks
-- **What:** `_poll_log()` compares `tuple(LOG_BUFFER)` snapshots
-  (deque at maxlen=200; cursor math breaks). Clear Log must clear
-  `LOG_BUFFER` itself, not just the widget.
+- **What:** `LOG_BUFFER` lives in `core/log_buffer.py` — a Qt-free
+  leaf module imported by `listener.py`, `commands.py`, and the log
+  tab in `settings.py`. `_poll_log()` compares `tuple(LOG_BUFFER)`
+  snapshots (deque at maxlen=200; cursor math breaks). Clear Log
+  must clear `LOG_BUFFER` itself, not just the widget.
+- **Don't:** Move `LOG_BUFFER` back into `listener.py` for
+  "locality" — `commands.py` and `settings.py` both import it, so
+  the cycle the leaf module breaks returns immediately.
 
 ### Monitor friendly names parsed from EDID via `core/edid.py`
 - **What:** `get_monitor_friendly_names()` runs `/usr/bin/edid-decode`

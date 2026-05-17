@@ -27,20 +27,22 @@ import queue
 import subprocess
 import threading
 import time
-from collections import deque
 from datetime import datetime
 
 import vosk
 
 from core.context import Context, State
+from core.log_buffer import LOG_BUFFER
+from core.notify import notify as _notify
 from core.wake import WakeWordDetector
 import core.commands as commands
 import core.overrides as overrides
 
 
 # -- Built-in phrase sets -----------------------------------------------------
-OPEN_MIC_PHRASES  = {"enable open mic", "always listen", "open mic", "enable open mike", "open mike", "open microphone"}
-CLOSE_MIC_PHRASES = {"disable open mic", "stop listening", "close mic", "disable open mike", "close mike", "close microphone"}
+# Open/close mic phrase defaults live in core/commands.py alongside the other
+# shipped defaults (see DEFAULT_OPEN_MIC_PHRASES / DEFAULT_CLOSE_MIC_PHRASES).
+# Confirm/cancel are hardcoded here -- not user-configurable.
 CONFIRM_PHRASES   = {"confirm", "yes", "do it"}
 CANCEL_PHRASES    = {"cancel", "never mind", "abort"}
 
@@ -52,10 +54,6 @@ _CONFIRM_BODY = (
     "Say 'confirm', 'yes', or 'do it' to proceed.\n"
     "Say 'cancel', 'never mind', or 'abort' to cancel."
 )
-
-# -- Log buffer (read by Settings log tab) ------------------------------------
-# Timestamped lines of what Vosk heard. Capped at 200 to bound memory.
-LOG_BUFFER: deque[str] = deque(maxlen=200)
 
 # -- Mic change polling -------------------------------------------------------
 CHECK_MIC_EVERY = 50
@@ -72,13 +70,6 @@ _HALLUCINATION_STOPWORDS = {"the", "a", "an", "uh", "um", "huh", "oh", "and", "i
 def _get_default_source() -> str:
     result = subprocess.run(["pactl", "get-default-source"], capture_output=True, text=True)
     return result.stdout.strip()
-
-
-def _notify(summary: str, body: str = "", timeout_ms: int = 3000, gui_env: dict = None) -> None:
-    subprocess.Popen(
-        ["notify-send", "--app-name=Voice Commander", f"--expire-time={timeout_ms}", summary, body],
-        env=gui_env,
-    )
 
 
 def _open_pw_record(source: str) -> subprocess.Popen:

@@ -31,21 +31,25 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from difflib import SequenceMatcher
 from typing import Any
 
 from core.actions import apps, system, windows
 from core.aliases import PINNED_SLOT, default_aliases as _default_aliases
+from core.desktop import extract_exec_token
+from core.log_buffer import LOG_BUFFER
+from core.matcher import _similarity
+from core.notify import notify as _notify
 from core.overrides import DEFAULT_OVERRIDES
+from core.paths import CONFIG_PATH
 
 
-# -- Notify helper ------------------------------------------------------------
-
-def _notify(summary: str, body: str = "", timeout_ms: int = 2000, gui_env: dict = None) -> None:
-    subprocess.Popen(
-        ["notify-send", "--app-name=Voice Commander", f"--expire-time={timeout_ms}", summary, body],
-        env=gui_env,
-    )
+# -- Default mic phrase lists ------------------------------------------------
+# Shipped in commands.json on first install (via --emit-defaults below) and
+# referenced by the Open Mic tab's 'Restore Defaults' button. Also used as
+# the in-process fallback by get_open_mic_phrases() / get_close_mic_phrases()
+# if commands.json is missing these top-level fields entirely.
+DEFAULT_OPEN_MIC_PHRASES  = ["open mic", "open mike", "open microphone"]
+DEFAULT_CLOSE_MIC_PHRASES = ["close mic", "close mike", "close microphone"]
 
 
 # -- Action registry ----------------------------------------------------------
@@ -73,7 +77,6 @@ ACTION_REGISTRY: dict[str, Any] = {
     "close_window":           windows.close_window,
 }
 
-CONFIG_PATH = os.path.expanduser("~/.config/voice-commander/commands.json")
 CHECK_MTIME_EVERY = 100
 DEFAULT_THRESHOLD = 0.75
 # Tail-rescore threshold for non-slot fuzzy matches whose leading token is
@@ -101,25 +104,18 @@ _SYSTEM_APPS_DIR = "/usr/share/applications"
 
 
 def _parse_exec_from_desktop(desktop_path: str) -> str | None:
-    """Extract the executable name from a .desktop file's Exec= line.
-    Skips 'env' and KEY=VALUE tokens, strips %x field codes."""
+    """Read a .desktop file and return its executable token, or None.
+    Thin wrapper around extract_exec_token() that handles the
+    ConfigParser boilerplate."""
     try:
         import configparser
         cp = configparser.ConfigParser(interpolation=None)
         cp.read(desktop_path, encoding="utf-8")
         if "Desktop Entry" not in cp:
             return None
-        exec_val = cp["Desktop Entry"].get("Exec", "")
-        exec_val = re.sub(r"%\S", "", exec_val).strip()
-        for token in exec_val.split():
-            if token == "env":
-                continue
-            if "=" in token:
-                continue
-            return token
+        return extract_exec_token(cp["Desktop Entry"].get("Exec", ""))
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _detect_default_browser() -> str | None:
@@ -390,16 +386,14 @@ def get_open_mic_phrases() -> set[str]:
     phrases = _config.get("open_mic_phrases")
     if isinstance(phrases, list) and phrases:
         return {p.lower().strip() for p in phrases}
-    from core.listener import OPEN_MIC_PHRASES
-    return OPEN_MIC_PHRASES
+    return {p.lower().strip() for p in DEFAULT_OPEN_MIC_PHRASES}
 
 
 def get_close_mic_phrases() -> set[str]:
     phrases = _config.get("close_mic_phrases")
     if isinstance(phrases, list) and phrases:
         return {p.lower().strip() for p in phrases}
-    from core.listener import CLOSE_MIC_PHRASES
-    return CLOSE_MIC_PHRASES
+    return {p.lower().strip() for p in DEFAULT_CLOSE_MIC_PHRASES}
 
 
 def get_overrides() -> list[dict]:
@@ -444,12 +438,6 @@ def get_vosk_model_path() -> str:
         raise ValueError(f"Not a valid Vosk model directory (missing am/final.mdl): {path}")
 
     return path
-
-
-# -- Similarity helper --------------------------------------------------------
-
-def _similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
 # -- Slot-bearing phrase handling ---------------------------------------------
@@ -758,7 +746,6 @@ def _dispatch(cmd: dict, resolved_args: dict, gui_env: dict, context) -> None:
         msg = f"'{display}' command is missing required setting(s): {', '.join(missing)}"
         print(f"[commands] {msg}")
         _notify("Command not configured", msg, gui_env=gui_env)
-        from core.listener import LOG_BUFFER
         LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! {msg}")
         return
 
@@ -772,7 +759,6 @@ def _dispatch(cmd: dict, resolved_args: dict, gui_env: dict, context) -> None:
     _last_fired[cmd["name"]] = time.time()
     _notify(summary, gui_env=gui_env)
 
-    from core.listener import LOG_BUFFER
     LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  >> {summary}")
 
     if context:
@@ -792,8 +778,7 @@ def _dispatch_with_monitor(cmd: dict, args: dict, target_output: str | None,
         entry = f"{target_output}:{_wm_class_hint(cmd)}"
         windows.write_next_screen(entry, gui_env)
         time.sleep(0.3)
-        from core.listener import LOG_BUFFER as _log
-        _log.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target_output}")
+        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target_output}")
 
     _dispatch(cmd, args, gui_env, context)
 
@@ -848,8 +833,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                 # Don't allow confirm-required commands in chains
                 if cmd.get("confirm"):
                     print(f"[commands] Chain aborted: '{cmd['name']}' requires confirmation")
-                    from core.listener import LOG_BUFFER as _log
-                    _log.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' requires confirmation")
+                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' requires confirmation")
                     chain_ok = False
                     chain_rejected = True
                     break
@@ -859,8 +843,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                     last = _last_fired.get(cmd["name"], 0.0)
                     if time.time() - last < cooldown:
                         print(f"[commands] Chain aborted: '{cmd['name']}' on cooldown")
-                        from core.listener import LOG_BUFFER as _log
-                        _log.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' on cooldown")
+                        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' on cooldown")
                         chain_ok = False
                         chain_rejected = True
                         break
@@ -883,8 +866,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                         (cmd, args, last_target) for cmd, args, _ in matches[:-1]
                     ] + [matches[-1]]
                     print(f"[commands] Trailing target '{last_target}' propagated to {len(matches) - 1} prior segment(s)")
-                    from core.listener import LOG_BUFFER as _log
-                    _log.append(f"{datetime.now().strftime('%H:%M:%S')}  Trailing target propagated: all segments -> {last_target}")
+                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Trailing target propagated: all segments -> {last_target}")
 
             # Two-or-more open_url commands targeting DIFFERENT monitors race in
             # ways we can't fix (the browser may reuse an existing window, open
@@ -898,8 +880,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                 url_targets = [target for cmd, _, target in matches if cmd["action"] == "open_url"]
                 if len(url_targets) >= 2 and len(set(url_targets)) > 1:
                     print("[commands] Chain aborted: multiple open_url commands targeting different monitors")
-                    from core.listener import LOG_BUFFER as _log
-                    _log.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: multiple URLs targeting different monitors")
+                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: multiple URLs targeting different monitors")
                     chain_ok = False
                     chain_rejected = True
 
@@ -911,8 +892,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
 
             if chain_ok and matches:
                 print(f"[commands] Chained {len(matches)} commands")
-                from core.listener import LOG_BUFFER as _log
-                _log.append(f"{datetime.now().strftime('%H:%M:%S')}  Chaining {len(matches)} commands")
+                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Chaining {len(matches)} commands")
 
                 # Build a queue of "output:wm_class" entries so the KWin
                 # placer can match each arriving window to the correct
@@ -983,8 +963,8 @@ if __name__ == "__main__":
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],
             "wake_words": ["computer", "hey dude"],
             "monitors": {},
-            "open_mic_phrases": ["open mic", "open mike", "open microphone"],
-            "close_mic_phrases": ["close mic", "close mike", "close microphone"],
+            "open_mic_phrases": list(DEFAULT_OPEN_MIC_PHRASES),
+            "close_mic_phrases": list(DEFAULT_CLOSE_MIC_PHRASES),
             "overrides": [],
         }
         json.dump(config, sys.stdout, indent=2)

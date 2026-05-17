@@ -26,12 +26,11 @@ import json
 import os
 import re
 import subprocess
-from difflib import SequenceMatcher
 
 from core.edid import get_monitor_friendly_names
+from core.matcher import _similarity
+from core.paths import CONFIG_PATH
 
-
-CONFIG_PATH = os.path.expanduser("~/.config/voice-commander/commands.json")
 
 # Cached output-name -> KWin screen index mapping.
 # Built by refresh_monitor_map() at startup and on config reload.
@@ -188,10 +187,6 @@ def write_next_screen(output_name: str, gui_env: dict) -> None:
             print("[windows] Cleared next-screen signal")
     except Exception as e:
         print(f"[windows] write_next_screen failed: {e}")
-
-
-def _similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
 def _resolve_monitor(raw: str) -> tuple[str, int]:

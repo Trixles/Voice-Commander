@@ -70,7 +70,12 @@ from PySide6.QtWidgets import (
     QScrollArea, QSizePolicy, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from core.commands import ACTION_REGISTRY, CONFIG_PATH, get_vosk_model_path, _default_commands
+from core.commands import (
+    ACTION_REGISTRY, get_vosk_model_path, _default_commands,
+    DEFAULT_OPEN_MIC_PHRASES as _DEFAULT_OPEN_MIC_PHRASES,
+    DEFAULT_CLOSE_MIC_PHRASES as _DEFAULT_CLOSE_MIC_PHRASES,
+)
+from core.paths import CONFIG_PATH
 from core.aliases import (
     PINNED_SLOT as _PINNED_SLOT,
     default_aliases as _default_aliases,
@@ -294,17 +299,6 @@ def _h_rule() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
-
-
-# Default mic phrases. Mirror of the lists written by commands.py's
-# --emit-defaults path, so 'Restore Defaults' on the Open Mic tab puts
-# a freshly-installed user back to the canonical shipping state.
-# NOTE: core/listener.py also has OPEN_MIC_PHRASES / CLOSE_MIC_PHRASES
-# fallback constants which currently list 6 phrases each instead of 3.
-# That's a pre-existing divergence and not what 'restore defaults' should
-# produce -- the shipped commands.json default is the source of truth here.
-_DEFAULT_OPEN_MIC_PHRASES  = ["open mic", "open mike", "open microphone"]
-_DEFAULT_CLOSE_MIC_PHRASES = ["close mic", "close mike", "close microphone"]
 
 
 # -- App picker popup ---------------------------------------------------------
@@ -1717,8 +1711,7 @@ class SettingsDialog(QDialog):
         if isinstance(existing_open, list) and existing_open:
             self._open_mic_edit.setPlainText(", ".join(existing_open))
         else:
-            from core.listener import OPEN_MIC_PHRASES
-            self._open_mic_edit.setPlainText(", ".join(sorted(OPEN_MIC_PHRASES)))
+            self._open_mic_edit.setPlainText(", ".join(_DEFAULT_OPEN_MIC_PHRASES))
         cl.addWidget(self._open_mic_edit)
 
         cl.addSpacing(12)
@@ -1734,8 +1727,7 @@ class SettingsDialog(QDialog):
         if isinstance(existing_close, list) and existing_close:
             self._close_mic_edit.setPlainText(", ".join(existing_close))
         else:
-            from core.listener import CLOSE_MIC_PHRASES
-            self._close_mic_edit.setPlainText(", ".join(sorted(CLOSE_MIC_PHRASES)))
+            self._close_mic_edit.setPlainText(", ".join(_DEFAULT_CLOSE_MIC_PHRASES))
         cl.addWidget(self._close_mic_edit)
         cl.addStretch()
         return tab
@@ -1792,7 +1784,7 @@ class SettingsDialog(QDialog):
         cl.addWidget(self._log_view)
 
         # Seed with any existing buffer content.
-        from core.listener import LOG_BUFFER
+        from core.log_buffer import LOG_BUFFER
         self._last_log_snapshot = tuple(LOG_BUFFER)
         if self._last_log_snapshot:
             html_lines = [_colorize_log_line(line) for line in self._last_log_snapshot]
@@ -1816,7 +1808,7 @@ class SettingsDialog(QDialog):
         # and surface on the next tick after deselection.
         if self._log_selection_active:
             return
-        from core.listener import LOG_BUFFER
+        from core.log_buffer import LOG_BUFFER
         current = tuple(LOG_BUFFER)
         if current == self._last_log_snapshot:
             return
@@ -1840,7 +1832,7 @@ class SettingsDialog(QDialog):
 
     def _clear_log(self) -> None:
         """Clear the log view and the underlying buffer."""
-        from core.listener import LOG_BUFFER
+        from core.log_buffer import LOG_BUFFER
         LOG_BUFFER.clear()
         self._last_log_snapshot = ()
         self._log_view.clear()

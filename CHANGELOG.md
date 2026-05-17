@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] &mdash; 2026-05-16
+
+### Added
+- **Overrides:** user-editable Vosk mishearing rewrites applied before
+  matching. Configure in Settings &raquo; Overrides. Six built-in
+  defaults ship with the app (locked, undeletable): "moved to" &rarr;
+  "move to"; "up and", "hope in", "oh been" &rarr; "open"; "cause"
+  &rarr; "close"; "mike" &rarr; "mic". User rules support whole-word
+  matching, first-match-wins ordering, and empty-replacement
+  filler-word deletion.
+- Restore Defaults button is now per-tab (Commands, Overrides,
+  Displays, Open Mic). The bottom-bar button dispatches to whichever
+  tab is active; disabled with explanation on tabs with no defaults
+  (Model, Log, How to Use).
+- Save button is now dirty-tracked: starts disabled, enables only when
+  a setting has changed.
+
+### Changed
+- Vosk normalization layer split. Hardcoded mishearing rewrites moved
+  out of `core/listener.py._normalize()` into the new override system.
+  Only the "the " prefix hallucination filter remains in `_normalize()`
+  as plumbing (microphone AGC artifact, not a transcription mistake).
+- Settings dialog gains a 7th tab ("Overrides"); tab order is
+  Commands, Overrides, Displays, Open Mic, Model, Log, How to Use.
+
 ## [0.3.0] &mdash; 2026-05-16
 
 ### Added
@@ -99,7 +124,8 @@ Initial public release.
   affects any external tool trying to place these browsers. Workaround:
   open the browser first, then use `"move to {monitor}"` to relocate it.
 
-[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Trixles/Voice-Commander/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Trixles/Voice-Commander/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Trixles/Voice-Commander/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Trixles/Voice-Commander/releases/tag/v0.1.0

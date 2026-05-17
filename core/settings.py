@@ -3,18 +3,27 @@ core/settings.py
 ================
 QDialog-based settings UI for Voice Commander.
 
-Tab layout:
-  - Commands tab  : Wake word field, command accordion rows
-  - Displays tab  : monitor alias accordion rows
-  - Open Mic tab  : open/close mic phrase editors
-  - How It Works  : explanatory blurb (renamed to "About" tab)
+Tab layout (left to right):
+  - Commands    : Wake word field, command accordion rows
+  - Overrides   : Vosk mishearing rewrite rules (defaults + user rules)
+  - Displays    : monitor alias accordion rows
+  - Open Mic    : open/close mic phrase editors
+  - Model       : Vosk model path picker
+  - Log         : live listener output with colour-coded categories
+  - How to Use  : explanatory blurb
 
-Save / Close buttons pinned outside tabs at the bottom.
+Save / Restore Defaults / Exit buttons pinned outside tabs at the bottom.
+Restore Defaults is per-tab: dispatches to the active tab's reset handler
+via `_tab_reset_map`, disabled with a tooltip on tabs without defaults
+(Model, Log, How to Use).
 
 Save behavior:
   - Writes through the symlink to the real file
   - Immediately calls commands.load_config() so changes are live without restart
-  - Wake word changes still require a service restart (detector built at startup)
+  - Wake word and Vosk model changes still require a service restart
+    (detector / model loaded at startup)
+  - Dirty-tracked: starts disabled, enables on the first user-driven edit
+    to any field, disables again after a successful save
 
 Command name/slug rules:
   - User actions (launch_app, open_url, open_file, run_command): name is
@@ -66,6 +75,7 @@ from core.aliases import (
     PINNED_SLOT as _PINNED_SLOT,
     default_aliases as _default_aliases,
 )
+from core.overrides import DEFAULT_OVERRIDES, sanitize as _sanitize_override, is_valid as _is_valid_override
 from core.actions.windows import get_connected_outputs, get_monitor_details
 from core.env import GUI_ENV
 
@@ -284,6 +294,17 @@ def _h_rule() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
+
+
+# Default mic phrases. Mirror of the lists written by commands.py's
+# --emit-defaults path, so 'Restore Defaults' on the Open Mic tab puts
+# a freshly-installed user back to the canonical shipping state.
+# NOTE: core/listener.py also has OPEN_MIC_PHRASES / CLOSE_MIC_PHRASES
+# fallback constants which currently list 6 phrases each instead of 3.
+# That's a pre-existing divergence and not what 'restore defaults' should
+# produce -- the shipped commands.json default is the source of truth here.
+_DEFAULT_OPEN_MIC_PHRASES  = ["open mic", "open mike", "open microphone"]
+_DEFAULT_CLOSE_MIC_PHRASES = ["close mic", "close mike", "close microphone"]
 
 
 # -- App picker popup ---------------------------------------------------------
@@ -1034,6 +1055,277 @@ class MonitorRow(QWidget):
         return self._output_name, [a.strip() for a in raw.split(",") if a.strip()]
 
 
+# -- Override row + container -------------------------------------------------
+
+class OverrideRow(QWidget):
+    """
+    One row in the Overrides tab. Two text fields side-by-side:
+        [ pattern ]  ->  [ replacement ]  [X]
+
+    Layout recipe -- the row is split into two equal-stretch halves with
+    the arrow as the bridge between them, so the arrow column is anchored
+    to the SAME horizontal-center reference the parent uses to center the
+    "+ Add Override" button above the rows. This means: arrow follows the
+    dialog's true horizontal midpoint at any width, with no calibration
+    constants.
+
+    Outer layout:
+      [ left half (stretch=1) ][ arrow (no stretch) ][ right half (stretch=1) ]
+
+    Left half:  [ pattern (Expanding) ]
+    Right half: [ becomes (Expanding) ][ X (fixed 28px) ]
+
+    Pattern fills the left half edge-to-edge; becomes+X fill the right
+    half. Because the two halves have equal stretch on the outer layout,
+    the arrow lands exactly at the row center -- which is the same x as
+    the centered Add Override button.
+
+    Net visual result:
+      - All rows: pattern left, pattern right, arrow center, and
+        becomes-left all align at the same x across user and default rows.
+        Pattern fills [left-margin, row-center]. (Same width on every row
+        because the left half is identical across row types.)
+      - User rows end with [becomes][X]. X right edge = row right edge.
+      - Default rows: X is hidden. Becomes is the only Expanding widget
+        in the right half so it absorbs the freed X slot, extending out
+        to where the user-row X right edge sits.
+
+    Why split halves instead of one flat row: with a single flat row,
+    centering the arrow at the dialog midpoint requires either a fixed-
+    width pattern (which breaks font scaling) or a hand-tuned minimum
+    width on pattern (which only lands at midpoint at one specific
+    dialog width). The split-halves design uses Qt's own stretch math
+    to anchor the arrow at center -- it's the same mechanism that
+    centers the Add Override button, just applied to a row.
+
+    Two modes:
+      - is_default=True : both fields read-only and greyed (inherit
+        QLineEdit:read-only styling). X is hidden; becomes (the only
+        Expanding widget in the right half) absorbs the freed slot.
+      - is_default=False: editable user row. The red X is visible and
+        deletes the row (visual-only until Save).
+
+    Emits `dirtied` whenever either field changes (user rows only --
+    default rows are read-only so they never fire).
+    """
+
+    dirtied = Signal()
+    delete_requested = Signal(object)  # passes self to parent container
+
+    def __init__(self, pattern: str, replacement: str, is_default: bool = False, parent=None):
+        super().__init__(parent)
+        self._is_default = is_default
+
+        outer = QHBoxLayout(self)
+        # Left/right margins 0 so rows start flush at the parent content
+        # edge -- the parent (_make_scroll_tab) already adds 16px padding.
+        outer.setContentsMargins(0, 3, 0, 3)
+        outer.setSpacing(6)
+
+        # -- Left half: pattern field, filling the half edge-to-edge -----
+        left_half = QWidget()
+        lh = QHBoxLayout(left_half)
+        lh.setContentsMargins(0, 0, 0, 0)
+        lh.setSpacing(6)
+
+        self._pattern_edit = QLineEdit(pattern)
+        self._pattern_edit.setPlaceholderText("what Vosk heard")
+        self._pattern_edit.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                          QSizePolicy.Policy.Fixed)
+        lh.addWidget(self._pattern_edit)
+
+        # -- The bridge: arrow with no stretch, sits between halves ------
+        arrow = QLabel("\u2192")  # rightwards arrow
+        arrow.setStyleSheet("color: #a6adc8; padding: 0 2px;")
+        arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # -- Right half: becomes (Expanding) + X (fixed) -----------------
+        right_half = QWidget()
+        rh = QHBoxLayout(right_half)
+        rh.setContentsMargins(0, 0, 0, 0)
+        rh.setSpacing(6)
+
+        self._replacement_edit = QLineEdit(replacement)
+        self._replacement_edit.setPlaceholderText("what you meant (blank = delete)")
+        self._replacement_edit.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                              QSizePolicy.Policy.Fixed)
+        rh.addWidget(self._replacement_edit)
+
+        self._delete_btn = QPushButton("\u2715")  # multiplication x
+        self._delete_btn.setObjectName("deleteBtn")
+        self._delete_btn.setFixedSize(28, 28)
+        self._delete_btn.setToolTip("Delete this override")
+        self._delete_btn.clicked.connect(lambda: self.delete_requested.emit(self))
+        if is_default:
+            # Just setVisible(False). Default retainSizeWhenHidden is False,
+            # so the slot frees and becomes (the only Expanding widget in
+            # the right half) absorbs it. Mirrors CommandRow's recipe.
+            self._delete_btn.setVisible(False)
+        rh.addWidget(self._delete_btn)
+
+        if is_default:
+            self._pattern_edit.setReadOnly(True)
+            self._replacement_edit.setReadOnly(True)
+            tip = "Built-in default. Cannot be edited or removed."
+            self._pattern_edit.setToolTip(tip)
+            self._replacement_edit.setToolTip(tip)
+
+        # Equal stretch on left and right halves means their boundary IS
+        # the row center. Arrow has no stretch, so it stays parked at the
+        # boundary.
+        outer.addWidget(left_half, 1)
+        outer.addWidget(arrow)
+        outer.addWidget(right_half, 1)
+
+        # Wire dirty AFTER initial setText (the constructor sets text via
+        # QLineEdit(pattern) which doesn't fire textChanged anyway, but we
+        # also avoid connecting on default rows since they're read-only).
+        if not is_default:
+            self._pattern_edit.textChanged.connect(self.dirtied)
+            self._replacement_edit.textChanged.connect(self.dirtied)
+
+    def to_dict(self) -> dict | None:
+        """Return a sanitized {pattern, replacement} dict, or None if
+        invalid (empty pattern after sanitization). Defaults are excluded
+        by the container -- this method always runs as if the row were a
+        user row."""
+        pattern = self._pattern_edit.text()
+        replacement = self._replacement_edit.text()
+        if not _is_valid_override(pattern, replacement):
+            return None
+        p, r = _sanitize_override(pattern, replacement)
+        return {"pattern": p, "replacement": r}
+
+    @property
+    def is_default(self) -> bool:
+        return self._is_default
+
+
+class OverridesContainer(QWidget):
+    """
+    Manages the list of OverrideRow widgets in the Overrides tab.
+
+    Layout (top to bottom):
+        [+ Add Override]
+        [user row 1]      (editable, with X)
+        [user row 2]
+        ...
+        [default row 1]   (locked, greyed)
+        [default row 2]
+        ...
+
+    User rows render ABOVE defaults purely cosmetically -- the runtime
+    execution order in commands.get_overrides() still puts defaults first.
+    User rows live at the top so the user's own work is what they see first;
+    the defaults sit below as 'foundational, can't-touch-this' reference.
+
+    Defaults are never collected (they live in DEFAULT_OVERRIDES, not config).
+    New user rows append at the BOTTOM of the user-rows group (just above
+    the defaults), so the first-match-wins order matches the visual order.
+
+    All rows share a single QVBoxLayout so QLineEdit columns align across
+    user and default rows -- mixing layouts produces drift.
+
+    Red X deletes the row from the UI and marks the dialog dirty, but does
+    NOT persist until the Save button is clicked. Same as every other
+    editable widget in this dialog -- consistency with the Commands tab
+    and the general dirty-tracking contract is more important than the
+    'instant delete' affordance.
+    """
+
+    dirtied = Signal()
+
+    def __init__(self, user_overrides: list[dict], parent=None):
+        super().__init__(parent)
+        self._user_rows: list[OverrideRow] = []
+        self._default_rows: list[OverrideRow] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        add_btn = QPushButton("+ Add Override")
+        add_btn.setFixedWidth(130)
+        add_btn.clicked.connect(self._add_blank_row)
+        layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addSpacing(8)
+
+        # User rows live in their own sublayout so we can insert new rows
+        # at the bottom of THIS group (just above defaults) without poking
+        # into the parent layout's index math. Both sublayouts share the
+        # same parent margins/spacing, so column alignment is preserved.
+        self._user_rows_layout = QVBoxLayout()
+        self._user_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._user_rows_layout.setSpacing(0)
+        layout.addLayout(self._user_rows_layout)
+
+        for o in (user_overrides or []):
+            if not isinstance(o, dict):
+                continue
+            pattern = o.get("pattern", "")
+            replacement = o.get("replacement", "")
+            if not isinstance(pattern, str) or not isinstance(replacement, str):
+                continue
+            self._append_user_row(OverrideRow(pattern, replacement, is_default=False))
+
+        # Defaults: locked, rendered below user rows.
+        self._defaults_layout = QVBoxLayout()
+        self._defaults_layout.setContentsMargins(0, 0, 0, 0)
+        self._defaults_layout.setSpacing(0)
+        for d in DEFAULT_OVERRIDES:
+            row = OverrideRow(d["pattern"], d["replacement"], is_default=True)
+            self._default_rows.append(row)
+            self._defaults_layout.addWidget(row)
+        layout.addLayout(self._defaults_layout)
+
+        layout.addStretch()
+
+    def _append_user_row(self, row: OverrideRow) -> None:
+        self._user_rows.append(row)
+        self._user_rows_layout.addWidget(row)
+        row.dirtied.connect(self.dirtied)
+        row.delete_requested.connect(self._remove_row)
+
+    def _add_blank_row(self) -> None:
+        row = OverrideRow("", "", is_default=False)
+        self._append_user_row(row)
+        # Adding a row is itself a dirty change.
+        self.dirtied.emit()
+
+    def _remove_row(self, row: OverrideRow) -> None:
+        if row in self._user_rows:
+            self._user_rows.remove(row)
+            self._user_rows_layout.removeWidget(row)
+            row.deleteLater()
+            self.dirtied.emit()
+
+    def collect(self) -> list[dict]:
+        """Return the user override list to persist. Defaults are NOT
+        included -- they're code-defined and re-injected by
+        commands.get_overrides() at runtime.
+
+        Dedup on pattern with last-write-wins, matching the save-path
+        pattern used elsewhere (see ARCHITECTURE: 'Save path: dedup ...').
+        Invalid rows (empty pattern) are silently dropped.
+
+        NOTE: do NOT filter on row.isVisible() -- Qt reports widgets on
+        inactive tabs as not-visible, which would nuke every user rule
+        whenever Save is clicked from another tab. (Mirror of the
+        CommandsContainer.collect() invariant.)
+        """
+        seen: dict[str, dict] = {}
+        ordered_keys: list[str] = []
+        for row in self._user_rows:
+            d = row.to_dict()
+            if d is None:
+                continue
+            pattern = d["pattern"]
+            if pattern not in seen:
+                ordered_keys.append(pattern)
+            seen[pattern] = d  # last-write-wins on duplicate patterns
+        return [seen[k] for k in ordered_keys]
+
+
 # -- Main dialog --------------------------------------------------------------
 
 class SettingsDialog(QDialog):
@@ -1076,6 +1368,7 @@ class SettingsDialog(QDialog):
 
         self._tabs = QTabWidget()
         self._tabs.addTab(self._build_commands_tab(), "Commands")
+        self._tabs.addTab(self._build_overrides_tab(), "Overrides")
         self._tabs.addTab(self._build_displays_tab(), "Displays")
         self._tabs.addTab(self._build_open_mic_tab(), "Open Mic")
         self._tabs.addTab(self._build_model_tab(), "Model")
@@ -1084,6 +1377,21 @@ class SettingsDialog(QDialog):
         self._tabs.tabBar().setExpanding(True)
         self._tabs.tabBar().setMinimumWidth(540)
         root.addWidget(self._tabs)
+
+        # Map tab title -> per-tab reset handler. Tabs absent from this map
+        # (Model, Log, How to Use) have no per-tab defaults and disable the
+        # bottom-bar Restore Defaults button when selected. Keyed by tab
+        # TITLE rather than index so reordering tabs doesn't silently rewire.
+        self._tab_reset_map: dict = {
+            "Commands":  (self._reset_commands,
+                          "Restore the default set of commands (does not affect wake words, displays, overrides, or other settings)."),
+            "Overrides": (self._reset_overrides,
+                          "Remove all user-added override rules. Built-in defaults are unaffected."),
+            "Displays":  (self._reset_displays,
+                          "Reset every monitor's aliases to the shipped defaults (Display 1, Display 2, ...)."),
+            "Open Mic":  (self._reset_open_mic,
+                          "Restore the default open mic and close mic phrases."),
+        }
 
         btn_bar = QWidget()
         btn_bar.setObjectName("btnBar")
@@ -1096,8 +1404,7 @@ class SettingsDialog(QDialog):
         self._save_btn.setEnabled(False)
         self._reset_btn = QPushButton("Restore Defaults")
         self._reset_btn.setObjectName("resetBtn")
-        self._reset_btn.setToolTip("Restore the default set of commands (does not affect wake words, displays, or other settings)")
-        self._reset_btn.clicked.connect(self._reset_commands)
+        self._reset_btn.clicked.connect(self._reset_current_tab)
         self._close_btn = QPushButton("Exit")
         self._close_btn.clicked.connect(self.reject)
         bl.addStretch()
@@ -1107,6 +1414,11 @@ class SettingsDialog(QDialog):
         bl.addStretch()
         root.addWidget(btn_bar)
 
+        # Initial state of the Restore Defaults button matches the current tab,
+        # and updates whenever the user switches tabs.
+        self._tabs.currentChanged.connect(self._update_reset_button_for_tab)
+        self._update_reset_button_for_tab(self._tabs.currentIndex())
+
         # -- Dirty-tracking wiring ------------------------------------------
         # All editable widgets across all tabs are connected here, AFTER they've
         # been built and seeded with initial values. This means the initial
@@ -1115,6 +1427,7 @@ class SettingsDialog(QDialog):
         self._open_mic_edit.textChanged.connect(self._mark_dirty)
         self._close_mic_edit.textChanged.connect(self._mark_dirty)
         self._commands_container.dirtied.connect(self._mark_dirty)
+        self._overrides_container.dirtied.connect(self._mark_dirty)
         for mrow in self._monitor_rows:
             mrow.dirtied.connect(self._mark_dirty)
         # Model picker dirties via _browse_vosk_model -> _check_restart_needed,
@@ -1312,6 +1625,36 @@ class SettingsDialog(QDialog):
         self._commands_container = CommandsContainer(self._config.get("commands", []))
         cmd_fl.addWidget(self._commands_container)
         cl.addWidget(cmd_frame)
+        cl.addStretch()
+        return tab
+
+    def _build_overrides_tab(self) -> QWidget:
+        tab, cl = self._make_scroll_tab()
+        cl.addWidget(_section_label("Overrides"))
+        blurb = QLabel(
+            "Rewrite specific Vosk mishearings before the matcher sees them. "
+            "Useful when Vosk consistently mishears the same word (e.g. it transcribes "
+            "\"cause\" when you say \"close\"). Patterns match whole words only -- "
+            "a rule for \"in\" will not corrupt \"open\". Rules apply top-to-bottom; "
+            "if two rules touch the same text, the first one wins. Locked rows at "
+            "the top are built-in defaults that ship with Voice Commander."
+        )
+        blurb.setWordWrap(True)
+        blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
+        cl.addWidget(blurb)
+
+        ov_frame = QFrame()
+        ov_frame.setObjectName("overridesFrame")
+        ov_frame.setFrameShape(QFrame.Shape.NoFrame)
+        ov_fl = QVBoxLayout(ov_frame)
+        ov_fl.setContentsMargins(0, 0, 0, 0)
+        ov_fl.setSpacing(0)
+        user_overrides = self._config.get("overrides", [])
+        if not isinstance(user_overrides, list):
+            user_overrides = []
+        self._overrides_container = OverridesContainer(user_overrides)
+        ov_fl.addWidget(self._overrides_container)
+        cl.addWidget(ov_frame)
         cl.addStretch()
         return tab
 
@@ -1545,6 +1888,15 @@ class SettingsDialog(QDialog):
             QPushButton:pressed {
                 background-color: #585b70;
             }
+            QPushButton:disabled {
+                /* Distinctly inert so the user can see at a glance that this
+                   button can't be clicked right now. Background drops to the
+                   tab-bar dark tone; text and border drop to the dim overlay
+                   color (matches how :read-only QLineEdits are styled). */
+                background-color: #181825;
+                color: #45475a;
+                border-color: #313244;
+            }
             QPushButton#deleteBtn {
                 background-color: #3a1f2d;
                 color: #f38ba8;
@@ -1563,6 +1915,14 @@ class SettingsDialog(QDialog):
             QPushButton#resetBtn:hover {
                 background-color: #f38ba8;
                 color: #1e1e2e;
+            }
+            QPushButton#resetBtn:disabled {
+                /* When the active tab has no defaults to restore, the red
+                   tinting would look weirdly inviting. Override back to the
+                   neutral disabled style. */
+                background-color: #181825;
+                color: #45475a;
+                border-color: #313244;
             }
             QTabWidget::pane {
                 border: 1px solid #45475a;
@@ -1682,6 +2042,7 @@ class SettingsDialog(QDialog):
         old_wake_words  = self._config.get("wake_words", [self._config.get("wake_word", "computer")])
 
         commands = self._commands_container.collect()
+        overrides = self._overrides_container.collect()
 
         monitors: dict = dict(self._config.get("monitors", {}))
         for row in self._monitor_rows:
@@ -1716,6 +2077,8 @@ class SettingsDialog(QDialog):
             seen.add(name)
             deduped.append(c)
         new_config["commands"] = deduped
+        # Always write overrides (even when empty) so deleting all user rules persists.
+        new_config["overrides"] = overrides
 
         if monitors:
             new_config["monitors"] = monitors
@@ -1763,14 +2126,19 @@ class SettingsDialog(QDialog):
     def _reset_commands(self) -> None:
         """
         Confirm with the user, then overwrite the commands list with defaults.
-        Does not touch wake words, monitors, open mic phrases, or model settings.
-        Writes immediately and reloads -- no save click required.
+        Does not touch wake words, monitors, open mic phrases, overrides, or
+        model settings. Writes immediately and reloads -- no save click required.
+
+        Called from the per-tab 'Restore Defaults' button in the Commands tab
+        header (not the bottom button bar -- that global button was removed in
+        favour of scoped per-tab resets).
         """
         reply = QMessageBox.question(
             self,
             "Restore Defaults?",
             "This will replace all your custom commands with the defaults.\n\n"
-            "Wake words, displays, open mic phrases, and model settings will NOT be affected.\n\n"
+            "Wake words, displays, open mic phrases, overrides, and model settings "
+            "will NOT be affected.\n\n"
             "This cannot be undone. Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -1798,3 +2166,165 @@ class SettingsDialog(QDialog):
             "reopen it to see the new commands.",
         )
         self.accept()
+
+    def _reset_overrides(self) -> None:
+        """
+        Confirm, then clear all user-added overrides. Built-in defaults
+        (DEFAULT_OVERRIDES) are code-shipped and always present, so 'restoring
+        defaults' for overrides simply means wiping the user-added list.
+        """
+        reply = QMessageBox.question(
+            self,
+            "Clear User Overrides?",
+            "This will remove every override you have added.\n\n"
+            "The built-in defaults at the bottom of the list are unaffected -- "
+            "they ship with Voice Commander and are always present.\n\n"
+            "This cannot be undone. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                data = json.load(f)
+            data["overrides"] = []
+            _write_config(data)
+            import core.commands as _cmds
+            _cmds.load_config()
+            print("[settings] User overrides cleared.")
+        except Exception as e:
+            print(f"[settings] Override reset failed: {e}")
+            QMessageBox.warning(self, "Reset failed", f"Could not clear overrides:\n{e}")
+            return
+
+        QMessageBox.information(
+            self,
+            "Overrides cleared",
+            "User overrides have been cleared. The settings window will close; "
+            "reopen it to see the updated list.",
+        )
+        self.accept()
+
+    def _reset_displays(self) -> None:
+        """
+        Confirm, then reset every monitor's alias list to the shipped defaults
+        from core.aliases._default_aliases (Display 1, Display 2, ...).
+
+        Operates on the same monitor set the dialog was built with, so a user
+        who has plugged in a new monitor after opening settings won't see it
+        until the dialog is reopened -- consistent with the rest of the
+        Displays tab.
+        """
+        reply = QMessageBox.question(
+            self,
+            "Restore Default Aliases?",
+            "This will reset every monitor's alias list to the shipped defaults "
+            "(Display 1, Display 2, ...).\n\n"
+            "Wake words, commands, overrides, and other settings will NOT be affected.\n\n"
+            "This cannot be undone. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                data = json.load(f)
+            # Rebuild the monitors block from the dialog's monitor list using
+            # default aliases keyed by display-index order.
+            new_monitors: dict = {}
+            for i, m in enumerate(self._monitors):
+                new_monitors[m["name"]] = _default_aliases(i + 1)
+            data["monitors"] = new_monitors
+            _write_config(data)
+            import core.commands as _cmds
+            _cmds.load_config()
+            print("[settings] Display aliases reset to defaults.")
+        except Exception as e:
+            print(f"[settings] Display reset failed: {e}")
+            QMessageBox.warning(self, "Reset failed", f"Could not reset displays:\n{e}")
+            return
+
+        QMessageBox.information(
+            self,
+            "Defaults restored",
+            "Display aliases have been restored to defaults. The settings window "
+            "will close; reopen it to see the new aliases.",
+        )
+        self.accept()
+
+    def _reset_open_mic(self) -> None:
+        """
+        Confirm, then restore the shipping open/close mic phrase lists
+        (see _DEFAULT_OPEN_MIC_PHRASES / _DEFAULT_CLOSE_MIC_PHRASES above).
+        """
+        reply = QMessageBox.question(
+            self,
+            "Restore Default Phrases?",
+            "This will replace your open mic and close mic phrases with the defaults.\n\n"
+            "Wake words, commands, overrides, displays, and model settings will NOT "
+            "be affected.\n\n"
+            "This cannot be undone. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                data = json.load(f)
+            data["open_mic_phrases"]  = list(_DEFAULT_OPEN_MIC_PHRASES)
+            data["close_mic_phrases"] = list(_DEFAULT_CLOSE_MIC_PHRASES)
+            _write_config(data)
+            import core.commands as _cmds
+            _cmds.load_config()
+            print("[settings] Open Mic phrases reset to defaults.")
+        except Exception as e:
+            print(f"[settings] Open Mic reset failed: {e}")
+            QMessageBox.warning(self, "Reset failed", f"Could not reset Open Mic phrases:\n{e}")
+            return
+
+        QMessageBox.information(
+            self,
+            "Defaults restored",
+            "Open Mic phrases have been restored to defaults. The settings window "
+            "will close; reopen it to see the new phrases.",
+        )
+        self.accept()
+
+    def _update_reset_button_for_tab(self, idx: int) -> None:
+        """
+        Keep the bottom-bar 'Restore Defaults' button in sync with the active
+        tab. On tabs that have no defaults to restore (Model, Log, How to Use),
+        the button is disabled with a tooltip explaining why. On reset-capable
+        tabs, the tooltip is the per-tab message from `_tab_reset_map`.
+        """
+        title = self._tabs.tabText(idx)
+        entry = self._tab_reset_map.get(title)
+        if entry is None:
+            self._reset_btn.setEnabled(False)
+            self._reset_btn.setToolTip(
+                f"No defaults to restore on the {title} tab."
+            )
+        else:
+            _handler, tooltip = entry
+            self._reset_btn.setEnabled(True)
+            self._reset_btn.setToolTip(tooltip)
+
+    def _reset_current_tab(self) -> None:
+        """
+        Dispatch the bottom-bar 'Restore Defaults' click to the per-tab handler
+        registered in `_tab_reset_map`. Safe to call even if the active tab has
+        no handler -- it's a no-op (and the button should already be disabled
+        in that case via `_update_reset_button_for_tab`).
+        """
+        title = self._tabs.tabText(self._tabs.currentIndex())
+        entry = self._tab_reset_map.get(title)
+        if entry is None:
+            return
+        handler, _tooltip = entry
+        handler()

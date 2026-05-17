@@ -52,7 +52,7 @@ DEFAULT_OVERRIDES: list[dict] = [
     {"pattern": "hope in",  "replacement": "open"},
     {"pattern": "oh been",  "replacement": "open"},
     {"pattern": "cause",    "replacement": "close"},
-    {"pattern": "mike",     "replacement": "microphone"},
+    {"pattern": "mike",     "replacement": "mic"},
 ]
 
 # Pattern strings of defaults, for "is this a default?" checks in the UI.

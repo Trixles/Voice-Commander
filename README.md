@@ -16,6 +16,9 @@ your machine.
   speak your command.
 - **Configurable commands** via an in-app settings dialog. No JSON editing
   required.
+- **Vosk mishearing overrides.** Rewrite consistent transcription
+  mistakes before the matcher sees them (e.g. "cause" &rarr; "close").
+  Ships with sensible defaults; add your own in Settings &raquo; Overrides.
 - **Slot-based phrases.** `set volume to fifty`, `move to right monitor`
   &mdash; the variable parts are extracted and fuzzy-matched against known
   values.
@@ -116,7 +119,11 @@ Voice Commander runs as two cooperating threads:
 A KWin script (`vc-window-placer`) handles the one window-management
 trick that the rest of the system can't do via global shortcuts: routing
 newly-opened windows to a specific monitor. Voice Commander signals it
-by writing a key into `kwinrc` and calling KWin reconfigure.
+by writing a key into `kwinrc` and reloading the placer script via
+KWin's `Scripting` D-Bus interface (`unloadScript` then `loadScript`).
+KWin's `reconfigure` D-Bus call refreshes its own config but does *not*
+re-execute user scripts in current Plasma 6, so a true reload is
+required.
 
 The application runs under a `systemd --user` service so that Wayland
 and D-Bus environment variables are reconstructed from `/run/user/<uid>/`
@@ -149,6 +156,23 @@ For each command you configure:
 
 Settings &raquo; Displays tab. Aliases for each connected output let you
 say "move to TV" instead of "move to HDMI-A-2."
+
+### Fixing consistent Vosk mishearings (Overrides)
+
+If Vosk consistently transcribes the same wrong word when you say a
+specific command, you have two options:
+
+1. Add the mishearing as an alternate phrase on the command itself
+   (Settings &raquo; Commands &raquo; Options).
+2. Add an **Override** that rewrites the mishearing into the correct
+   text before the matcher sees it (Settings &raquo; Overrides).
+
+Overrides are the better choice when the mishearing recurs across many
+commands (e.g. Vosk hearing "cause" instead of "close" affects every
+command that uses the word "close"). They match whole words only
+&mdash; a rule for "in" will not corrupt "open". A small set of
+defaults ships with the app and is locked from editing; add your own
+rules above them.
 
 ## Security note
 
@@ -185,14 +209,6 @@ systemctl --user stop voice-commander
 
 ## Known issues
 
-- **"Open X on Y" sometimes opens the window on the wrong monitor.**
-  Issuing the same voice command twice can produce different monitor
-  placements. The Python-side monitor resolution is consistent across
-  attempts; the bug lives somewhere downstream in the KWin
-  window-placer script. Under investigation.
-- **Chained `"open X on Y and open Z on W"` is unreliable.** Likely
-  related to the issue above. Chained commands without per-monitor
-  targeting (`"open reddit and open youtube"`) work fine.
 - **Firefox-derivative browsers ignore monitor placement on launch.**
   See the Troubleshooting section below for details and workaround.
 
@@ -214,8 +230,10 @@ window geometry on launch, which overrides any placement done by KWin.
 This is a known limitation; it's not specific to Voice Commander.
 
 **Wake word not detected.** Vosk's small model can mishear "computer."
-Check the Log tab in settings to see what Vosk is transcribing. Add the
-common mishearings as alternate wake words.
+Check the Log tab in settings to see what Vosk is transcribing. Add
+the common mishearings as an Override (Settings &raquo; Overrides) so
+they rewrite back to "computer" before the matcher runs, or add them
+as alternate wake words.
 
 **Mic stops working.** Voice Commander auto-detects mic changes and
 restarts the audio pipeline. If the tray icon goes amber (ERROR) and

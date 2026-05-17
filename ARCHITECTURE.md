@@ -24,8 +24,8 @@ companion — keep them in sync.
 
 ### Slot-pinned commands and default aliases live in `core/aliases.py`
 - **What:** `PINNED_SLOT`, `PINNED_SLOT_NAMES`, `NUMBER_WORDS`, and
-  `default_aliases()` all live here. `commands.py` and `settings.py`
-  import from it; neither defines its own copy.
+  `default_aliases()` all live here. `commands.py` and the
+  `core/settings/` package import from it; neither defines its own copy.
 - **Don't:** Add Qt imports to `core/aliases.py` — `commands.py`
   must stay Qt-free so `install.sh`'s `python -m core.commands
   --emit-defaults` works without PySide6.
@@ -100,7 +100,7 @@ companion — keep them in sync.
 ### Settings UI has three command-row tiers
 - **What:** User actions (editable), system actions (locked
   name/dropdown, phrases editable), slot-pinned (fully read-only,
-  always last). Full spec in `settings.py` module docstring.
+  always last). Full spec in `core/settings/dialog.py` module docstring.
 - **Don't:** Add system actions to dropdown. Make system names
   editable. Add delete to system rows.
 
@@ -121,23 +121,24 @@ companion — keep them in sync.
   `_default_commands()` used by installer and Restore Defaults.
 - **Don't:** Hardcode defaults in `install.sh`.
 
-### Default mic phrases live in `commands.py`, not `settings.py` or `listener.py`
+### Default mic phrases live in `commands.py`, not the settings UI or `listener.py`
 - **What:** `DEFAULT_OPEN_MIC_PHRASES` / `DEFAULT_CLOSE_MIC_PHRASES`
   are module-level constants in `core/commands.py`.
   `_default_commands()` embeds them in `--emit-defaults` output.
-  `settings.py` imports them as `_DEFAULT_*` aliases for the Restore
-  Defaults buttons and for synthesizing missing keys on load.
-  `listener.py` reads runtime values via
+  `core/settings/tabs/open_mic_tab.py` imports them as `_DEFAULT_*`
+  aliases for the Restore Defaults buttons and for synthesizing missing
+  keys on load. `listener.py` reads runtime values via
   `commands.get_open_mic_phrases()` / `get_close_mic_phrases()` —
   no hardcoded fallback in the listener.
-- **Why:** Single source of truth. Pre-Tier-1, `settings.py` had
+- **Why:** Single source of truth. Pre-Tier-1, the settings UI had
   3-phrase defaults and `listener.py` had a 6-phrase fallback — they
   drifted, so a user's Restore Defaults produced different behavior
   than a fresh install.
 - **Don't:** Add a fallback constant in `listener.py`. Move the
-  canonical constants to `settings.py` — that re-couples defaults
-  to Qt and breaks `python -m core.commands --emit-defaults`, which
-  `install.sh` runs without PySide6 available.
+  canonical constants into the `core/settings/` package — that
+  re-couples defaults to Qt and breaks
+  `python -m core.commands --emit-defaults`, which `install.sh` runs
+  without PySide6 available.
 
 ### Save button: dirty-tracked, not always-on
 - **What:** Save starts disabled. A `dirtied` Qt Signal on
@@ -239,12 +240,13 @@ companion — keep them in sync.
 
 ### LOG_BUFFER quirks
 - **What:** `LOG_BUFFER` lives in `core/log_buffer.py` — a Qt-free
-  leaf module imported by `listener.py`, `commands.py`, and the log
-  tab in `settings.py`. `_poll_log()` compares `tuple(LOG_BUFFER)`
-  snapshots (deque at maxlen=200; cursor math breaks). Clear Log
-  must clear `LOG_BUFFER` itself, not just the widget.
+  leaf module imported by `listener.py`, `commands.py`, and
+  `core/settings/tabs/log_tab.py`. `_poll_log()` compares
+  `tuple(LOG_BUFFER)` snapshots (deque at maxlen=200; cursor math
+  breaks). Clear Log must clear `LOG_BUFFER` itself, not just the
+  widget.
 - **Don't:** Move `LOG_BUFFER` back into `listener.py` for
-  "locality" — `commands.py` and `settings.py` both import it, so
+  "locality" — `commands.py` and the settings UI both import it, so
   the cycle the leaf module breaks returns immediately.
 
 ### Monitor friendly names parsed from EDID via `core/edid.py`

@@ -1,0 +1,771 @@
+"""
+core/settings/tabs/commands_tab.py
+==================================
+The "Commands" tab plus the three widgets it owns:
+
+  AppPickerDialog     -- searchable popup over /usr/share/applications
+                         used by launch_app and the URL browser picker.
+  CommandRow          -- one accordion row per command (header + body).
+  CommandsContainer   -- the scrollable list of CommandRow widgets, plus
+                         the +Add button.
+
+`build(dialog)` constructs the tab QWidget and mutates the dialog with
+two attributes the rest of SettingsDialog needs to reach into:
+
+  dialog._wake_edit          -- QLineEdit for the wake-words field
+  dialog._commands_container -- the CommandsContainer instance
+
+The dirty-tracking signals on those attributes are wired by
+SettingsDialog._build_ui after every tab has been built, matching the
+existing pattern (initial setText calls during populate don't fire
+dirty because they happen before .connect()).
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import Qt, QSize, QSortFilterProxyModel, Signal
+from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout,
+    QLabel, QLineEdit, QListView, QPlainTextEdit, QPushButton, QSizePolicy,
+    QVBoxLayout, QWidget,
+)
+
+from core.aliases import PINNED_SLOT as _PINNED_SLOT
+from core.settings.helpers import (
+    APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY,
+    _ACTION_LABELS, _CONFIRM_ACTIONS, _CONFIRM_NOTE, _HIDDEN_COMMANDS,
+    _PINNED_SLOT_NAMES, _SELECTABLE_ACTIONS,
+    _display_name_from_action, _display_name_from_slug, _h_rule,
+    _is_user_action, _load_desktop_apps, _section_label, _slug_from_name,
+    _sort_key,
+)
+
+if TYPE_CHECKING:
+    from core.settings.dialog import SettingsDialog
+
+
+# -- App picker popup ---------------------------------------------------------
+
+class AppPickerDialog(QDialog):
+    """
+    Searchable list of installed applications parsed from .desktop files.
+    Double-click or OK to select. chosen_exec holds the result.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Choose Application")
+        self.setMinimumSize(360, 480)
+        self.chosen_exec: str | None = None
+
+        self._apps = _load_desktop_apps()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search applications...")
+        self._search.textChanged.connect(self._on_search)
+        layout.addWidget(self._search)
+
+        self._model = QStandardItemModel()
+        self._proxy = QSortFilterProxyModel()
+        self._proxy.setSourceModel(self._model)
+        self._proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._proxy.setFilterKeyColumn(0)
+
+        self._list = QListView()
+        self._list.setModel(self._proxy)
+        self._list.setIconSize(QSize(24, 24))
+        self._list.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
+        self._list.doubleClicked.connect(self._on_double_click)
+        layout.addWidget(self._list)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self._on_ok)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+        self._populate()
+
+    def _populate(self) -> None:
+        for app in self._apps:
+            item = QStandardItem(app["icon"], app["name"])
+            item.setData(app["exec"], Qt.ItemDataRole.UserRole)
+            item.setToolTip(app["exec"])
+            self._model.appendRow(item)
+
+    def _on_search(self, text: str) -> None:
+        self._proxy.setFilterFixedString(text)
+
+    def _on_ok(self) -> None:
+        idx = self._list.currentIndex()
+        if idx.isValid():
+            source_idx = self._proxy.mapToSource(idx)
+            self.chosen_exec = self._model.data(source_idx, Qt.ItemDataRole.UserRole)
+            self.accept()
+
+    def _on_double_click(self, idx) -> None:
+        source_idx = self._proxy.mapToSource(idx)
+        self.chosen_exec = self._model.data(source_idx, Qt.ItemDataRole.UserRole)
+        self.accept()
+
+
+# -- Command row widget -------------------------------------------------------
+
+class CommandRow(QWidget):
+    """
+    Accordion row for one command entry.
+
+    Header: [Name field] [Action dropdown] [Options btn] [Delete btn]
+    Body (hidden until expanded):
+        Phrases textarea
+        Action-specific arg widget
+        Confirmation-flow note (for confirm=true actions)
+
+    Name field behaviour:
+      - User actions (launch_app, open_url, open_file, run_command): editable.
+      - System actions: read-only static label; row preserves its original
+        slug across saves so 'Restore Defaults' can match by name.
+      - Slot-pinned rows: always read-only, no dropdown.
+
+    Stash/restore:
+      - _stash["app"], _stash["url"], _stash["path"], _stash["command"] persist
+        arg values across action switches.
+      - _stash["open_name"] persists the user-typed name when switching among
+        user actions.
+
+    Dirty tracking:
+      - Emits the `dirtied` signal whenever a user-driven change happens to
+        any editable widget. Container bubbles this up to SettingsDialog so
+        the Save button can flip from disabled to enabled.
+    """
+
+    dirtied = Signal()
+
+    def __init__(self, cmd: dict, parent=None):
+        super().__init__(parent)
+        self._cmd = cmd
+        self._expanded = False
+        self._is_slot_pinned = cmd.get("name") in _PINNED_SLOT_NAMES
+        action_key = cmd.get("action", "")
+        # System actions: not user-action, not slot-pinned. Dropdown is replaced
+        # by a static label and delete is hidden; phrases are still editable.
+        self._is_system_action = (
+            not self._is_slot_pinned and not _is_user_action(action_key)
+        )
+        # Stash: remembers per-action arg values and the user's open-type name.
+        self._stash: dict = {
+            "app": "",
+            "url": "",
+            "browser": "",
+            "path": "",
+            "command": "",
+            "open_name": "",
+        }
+        # Suppress _on_action_changed firing during _populate.
+        self._populating = False
+        self._build_ui()
+        self._populate(cmd)
+        self._wire_dirty_signals()
+
+    def _emit_dirty(self, *_args) -> None:
+        """Emit dirtied -- but only for user-driven changes, not _populate()."""
+        if not self._populating:
+            self.dirtied.emit()
+
+    def _wire_dirty_signals(self) -> None:
+        """Connect every editable widget's change signal to _emit_dirty.
+        Called after _populate so initial setText/setPlainText calls don't fire.
+        Slot-pinned rows have no editable widgets, so this is a no-op for them."""
+        if self._is_slot_pinned:
+            return
+        if self._name_edit is not None and not self._name_edit.isReadOnly():
+            self._name_edit.textChanged.connect(self._emit_dirty)
+        if self._action_combo is not None:
+            self._action_combo.currentIndexChanged.connect(self._emit_dirty)
+        self._phrases_edit.textChanged.connect(self._emit_dirty)
+        self._url_edit.textChanged.connect(self._emit_dirty)
+        self._shell_edit.textChanged.connect(self._emit_dirty)
+
+    def _build_ui(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # -- Header -----------------------------------------------------------
+        header = QWidget()
+        h = QHBoxLayout(header)
+        h.setContentsMargins(6, 4, 6, 4)
+        h.setSpacing(6)
+
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("Command name")
+        self._name_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        if self._is_slot_pinned:
+            # Slot-pinned: fully static, no dropdown, no Options button.
+            self._name_edit.setReadOnly(True)
+            self._action_combo = None
+            action_key = self._cmd.get("action", "")
+            action_lbl = QLabel(_ACTION_LABELS.get(action_key, action_key))
+            action_lbl.setFixedWidth(160)
+            action_lbl.setStyleSheet(
+                "background-color: #282839; color: #6c7086; font-size: 9pt;"
+                "border: 1px solid #45475a; border-radius: 4px; padding: 3px 6px;"
+            )
+            self._expand_btn = None
+            h.addWidget(self._name_edit)
+            h.addWidget(action_lbl)
+        elif self._is_system_action:
+            # System action: static label (matches slot-pinned style), no dropdown.
+            # Phrases are still editable via Options, but name and action are locked.
+            self._name_edit.setReadOnly(True)
+            self._action_combo = None
+            action_key = self._cmd.get("action", "")
+            action_lbl = QLabel(_ACTION_LABELS.get(action_key, action_key))
+            action_lbl.setFixedWidth(160)
+            action_lbl.setStyleSheet(
+                "background-color: #282839; color: #6c7086; font-size: 9pt;"
+                "border: 1px solid #45475a; border-radius: 4px; padding: 3px 6px;"
+            )
+            self._expand_btn = QPushButton("Options")
+            self._expand_btn.setFixedWidth(82)
+            self._expand_btn.clicked.connect(self._toggle_expand)
+            h.addWidget(self._name_edit)
+            h.addWidget(action_lbl)
+            h.addWidget(self._expand_btn)
+        else:
+            # User-editable row: dropdown of _SELECTABLE_ACTIONS only.
+            self._action_combo = QComboBox()
+            self._action_combo.setFixedWidth(160)
+            for key in _SELECTABLE_ACTIONS:
+                self._action_combo.addItem(_ACTION_LABELS.get(key, key), userData=key)
+            self._action_combo.currentIndexChanged.connect(self._on_action_changed)
+
+            self._expand_btn = QPushButton("Options")
+            self._expand_btn.setFixedWidth(82)
+            self._expand_btn.clicked.connect(self._toggle_expand)
+
+            h.addWidget(self._name_edit)
+            h.addWidget(self._action_combo)
+            h.addWidget(self._expand_btn)
+
+        self._delete_btn = QPushButton("\u2715")
+        self._delete_btn.setFixedSize(28, 28)
+        self._delete_btn.setObjectName("deleteBtn")
+        self._delete_btn.setToolTip("Delete command")
+        self._delete_btn.clicked.connect(self._on_delete)
+        if self._is_slot_pinned or self._is_system_action:
+            self._delete_btn.setVisible(False)
+        h.addWidget(self._delete_btn)
+        outer.addWidget(header)
+
+        # -- Body -------------------------------------------------------------
+        self._body = QFrame()
+        self._body.setObjectName("cmdBody")
+        self._body.setFrameShape(QFrame.Shape.NoFrame)
+        bl = QVBoxLayout(self._body)
+        bl.setContentsMargins(12, 6, 12, 10)
+        bl.setSpacing(6)
+
+        if self._is_slot_pinned:
+            note = QLabel("Slot-bearing phrase; cannot be edited.")
+            note.setStyleSheet("color: #888; font-style: italic; font-size: 9pt;")
+            bl.addWidget(note)
+
+        phrases_lbl_text = "Phrase:" if (
+            self._is_slot_pinned and len(self._cmd.get("phrases", [])) == 1
+        ) else "Phrases (comma-separated):"
+        phrases_lbl = QLabel(phrases_lbl_text)
+        phrases_lbl.setStyleSheet("font-size: 9pt;")
+        self._phrases_edit = QPlainTextEdit()
+        self._phrases_edit.setFixedHeight(60)
+        self._phrases_edit.setPlaceholderText("Enter phrases here, separated by commas.")
+        if self._is_slot_pinned:
+            self._phrases_edit.setReadOnly(True)
+        bl.addWidget(phrases_lbl)
+        bl.addWidget(self._phrases_edit)
+
+        # Confirmation-flow note (shown for confirm=true actions).
+        self._confirm_note = QLabel(_CONFIRM_NOTE)
+        self._confirm_note.setWordWrap(True)
+        self._confirm_note.setStyleSheet(
+            "color: #f9e2af; font-size: 9pt; font-style: italic; "
+            "background-color: #2a2519; border: 1px solid #6c5a1a; "
+            "border-radius: 4px; padding: 4px 6px;"
+        )
+        self._confirm_note.setVisible(False)
+        bl.addWidget(self._confirm_note)
+
+        # launch_app arg widget
+        self._app_widget = QWidget()
+        app_h = QHBoxLayout(self._app_widget)
+        app_h.setContentsMargins(0, 0, 0, 0)
+        app_h.setSpacing(6)
+        self._app_label = QLabel("No app selected")
+        self._app_label.setStyleSheet("font-size: 9pt; color: #888;")
+        self._app_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._app_pick_btn = QPushButton("Choose app...")
+        self._app_pick_btn.setFixedWidth(110)
+        self._app_pick_btn.clicked.connect(self._pick_app)
+        app_h.addWidget(QLabel("App:"))
+        app_h.addWidget(self._app_label)
+        app_h.addWidget(self._app_pick_btn)
+        bl.addWidget(self._app_widget)
+
+        # open_url arg widget
+        self._url_widget = QWidget()
+        url_vl = QVBoxLayout(self._url_widget)
+        url_vl.setContentsMargins(0, 0, 0, 0)
+        url_vl.setSpacing(6)
+        url_row = QWidget()
+        url_h = QHBoxLayout(url_row)
+        url_h.setContentsMargins(0, 0, 0, 0)
+        url_h.setSpacing(6)
+        url_h.addWidget(QLabel("URL:"))
+        self._url_edit = QLineEdit()
+        self._url_edit.setPlaceholderText("https://example.com")
+        url_h.addWidget(self._url_edit)
+        url_vl.addWidget(url_row)
+        # Browser picker row
+        browser_row = QWidget()
+        br_h = QHBoxLayout(browser_row)
+        br_h.setContentsMargins(0, 0, 0, 0)
+        br_h.setSpacing(6)
+        self._browser_label = QLabel("System default")
+        self._browser_label.setStyleSheet("font-size: 9pt; color: #888;")
+        self._browser_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._browser_pick_btn = QPushButton("Choose browser...")
+        self._browser_pick_btn.setFixedWidth(130)
+        self._browser_pick_btn.clicked.connect(self._pick_browser)
+        self._browser_clear_btn = QPushButton("\u2715")
+        self._browser_clear_btn.setFixedSize(28, 28)
+        self._browser_clear_btn.setToolTip("Reset to system default")
+        self._browser_clear_btn.clicked.connect(self._clear_browser)
+        br_h.addWidget(QLabel("Browser:"))
+        br_h.addWidget(self._browser_label)
+        br_h.addWidget(self._browser_pick_btn)
+        br_h.addWidget(self._browser_clear_btn)
+        url_vl.addWidget(browser_row)
+        bl.addWidget(self._url_widget)
+
+        # open_file arg widget
+        self._file_widget = QWidget()
+        file_h = QHBoxLayout(self._file_widget)
+        file_h.setContentsMargins(0, 0, 0, 0)
+        file_h.setSpacing(6)
+        self._file_label = QLabel("No file selected")
+        self._file_label.setStyleSheet("font-size: 9pt; color: #888;")
+        self._file_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._file_browse_btn = QPushButton("Browse...")
+        self._file_browse_btn.setFixedWidth(80)
+        self._file_browse_btn.clicked.connect(self._browse_file)
+        file_h.addWidget(QLabel("File:"))
+        file_h.addWidget(self._file_label)
+        file_h.addWidget(self._file_browse_btn)
+        bl.addWidget(self._file_widget)
+
+        # run_command arg widget
+        self._shell_widget = QWidget()
+        shell_h = QHBoxLayout(self._shell_widget)
+        shell_h.setContentsMargins(0, 0, 0, 0)
+        shell_h.setSpacing(6)
+        shell_h.addWidget(QLabel("Command:"))
+        self._shell_edit = QLineEdit()
+        self._shell_edit.setPlaceholderText("e.g. notify-send 'Hello'")
+        shell_h.addWidget(self._shell_edit)
+        bl.addWidget(self._shell_widget)
+
+        self._app_widget.setVisible(False)
+        self._url_widget.setVisible(False)
+        self._file_widget.setVisible(False)
+        self._shell_widget.setVisible(False)
+
+        # Slot-pinned rows start permanently expanded.
+        self._body.setVisible(self._is_slot_pinned)
+        if self._is_slot_pinned:
+            self._expanded = True
+        outer.addWidget(self._body)
+        outer.addWidget(_h_rule())
+
+    def _populate(self, cmd: dict) -> None:
+        self._populating = True
+        try:
+            action_key = cmd.get("action", "")
+            args = cmd.get("args", {})
+
+            # Seed stash from JSON args so switching away and back restores them.
+            self._stash["app"]     = args.get("app", "")
+            self._stash["url"]     = args.get("url", "")
+            self._stash["browser"] = args.get("browser", "")
+            self._stash["path"]    = args.get("path", "")
+            self._stash["command"] = args.get("command", "")
+
+            # Name field
+            if _is_user_action(action_key):
+                display = cmd.get("display_name") or _display_name_from_slug(cmd.get("name", ""))
+                self._stash["open_name"] = display
+            else:
+                display = _display_name_from_action(action_key)
+            self._name_edit.setText(display)
+            self._name_edit.setReadOnly(not _is_user_action(action_key))
+
+            # Combo
+            if self._action_combo is not None:
+                idx = self._action_combo.findData(action_key)
+                if idx >= 0:
+                    self._action_combo.setCurrentIndex(idx)
+
+            # Phrases
+            self._phrases_edit.setPlainText(", ".join(cmd.get("phrases", [])))
+
+            # Arg widgets
+            self._app_label.setText(args.get("app", "") or "No app selected")
+            self._url_edit.setText(args.get("url", ""))
+            browser = args.get("browser", "")
+            self._browser_label.setText(browser if browser else "System default")
+            self._file_label.setText(args.get("path", "") or "No file selected")
+            self._shell_edit.setText(args.get("command", ""))
+
+            self._update_arg_visibility(action_key)
+            self._update_confirm_note(action_key)
+        finally:
+            self._populating = False
+
+    def _current_action_key(self) -> str:
+        if self._action_combo is None:
+            return self._cmd.get("action", "")
+        return self._action_combo.currentData() or ""
+
+    def _on_action_changed(self) -> None:
+        if self._populating:
+            return
+
+        new_key = self._current_action_key()
+        # Stash the arg value for whatever action we're leaving.
+        # We don't know which action we're leaving, so stash all.
+        self._stash["app"]     = self._app_label.text() if self._app_label.text() != "No app selected" else ""
+        self._stash["url"]     = self._url_edit.text()
+        self._stash["browser"] = self._browser_label.text() if self._browser_label.text() != "System default" else ""
+        self._stash["path"]    = self._file_label.text() if self._file_label.text() != "No file selected" else ""
+        self._stash["command"] = self._shell_edit.text()
+
+        # Stash the user-typed name if we were on an open-type action.
+        # We detect this by whether the name field was editable before this change.
+        if not self._name_edit.isReadOnly():
+            self._stash["open_name"] = self._name_edit.text()
+
+        # Update name field: editable for user-actions, locked for system.
+        if _is_user_action(new_key):
+            self._name_edit.setReadOnly(False)
+            self._name_edit.setText(self._stash.get("open_name", ""))
+        else:
+            self._name_edit.setReadOnly(True)
+            self._name_edit.setText(_display_name_from_action(new_key))
+
+        # Restore arg value for the new action.
+        if new_key == APP_ACTION_KEY:
+            val = self._stash.get("app", "")
+            self._app_label.setText(val if val else "No app selected")
+        elif new_key == URL_ACTION_KEY:
+            self._url_edit.setText(self._stash.get("url", ""))
+            val = self._stash.get("browser", "")
+            self._browser_label.setText(val if val else "System default")
+        elif new_key == FILE_ACTION_KEY:
+            val = self._stash.get("path", "")
+            self._file_label.setText(val if val else "No file selected")
+        elif new_key == SHELL_ACTION_KEY:
+            self._shell_edit.setText(self._stash.get("command", ""))
+
+        self._update_arg_visibility(new_key)
+        self._update_confirm_note(new_key)
+
+    def _update_arg_visibility(self, action_key: str) -> None:
+        self._app_widget.setVisible(action_key == APP_ACTION_KEY)
+        self._url_widget.setVisible(action_key == URL_ACTION_KEY)
+        self._file_widget.setVisible(action_key == FILE_ACTION_KEY)
+        self._shell_widget.setVisible(action_key == SHELL_ACTION_KEY)
+
+    def _update_confirm_note(self, action_key: str) -> None:
+        self._confirm_note.setVisible(action_key in _CONFIRM_ACTIONS)
+
+    def _toggle_expand(self) -> None:
+        if self._is_slot_pinned:
+            return
+        self._expanded = not self._expanded
+        if self._expanded:
+            self._update_arg_visibility(self._current_action_key())
+        self._body.setVisible(self._expanded)
+
+    def _pick_app(self) -> None:
+        dlg = AppPickerDialog(self)
+        dlg.setStyleSheet(self.window().styleSheet())
+        if dlg.exec() and dlg.chosen_exec:
+            self._app_label.setText(dlg.chosen_exec)
+            self._stash["app"] = dlg.chosen_exec
+            self._emit_dirty()
+
+    def _pick_browser(self) -> None:
+        dlg = AppPickerDialog(self)
+        dlg.setStyleSheet(self.window().styleSheet())
+        if dlg.exec() and dlg.chosen_exec:
+            self._browser_label.setText(dlg.chosen_exec)
+            self._stash["browser"] = dlg.chosen_exec
+            self._emit_dirty()
+
+    def _clear_browser(self) -> None:
+        # Only mark dirty if there was actually a browser to clear.
+        was_set = self._browser_label.text() != "System default"
+        self._browser_label.setText("System default")
+        self._stash["browser"] = ""
+        if was_set:
+            self._emit_dirty()
+
+    def _browse_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose file", os.path.expanduser("~")
+        )
+        if path:
+            self._file_label.setText(path)
+            self._stash["path"] = path
+            self._emit_dirty()
+
+    def _on_delete(self) -> None:
+        p = self.parent()
+        if p and hasattr(p, "remove_row"):
+            p.remove_row(self)
+        else:
+            self.setVisible(False)
+
+    def to_dict(self, existing_slugs: set[str]) -> dict | None:
+        if self._is_slot_pinned:
+            return None  # Never written; managed as pinned rows only.
+
+        action_key = self._current_action_key()
+        phrases = [p.strip() for p in self._phrases_edit.toPlainText().split(",") if p.strip()]
+
+        # Collect arg value (may be empty -- that's okay for incomplete commands).
+        args: dict = {}
+        if action_key == APP_ACTION_KEY:
+            app = self._app_label.text()
+            if app and app != "No app selected":
+                args["app"] = app
+        elif action_key == URL_ACTION_KEY:
+            url = self._url_edit.text().strip()
+            if url:
+                args["url"] = url
+            browser = self._browser_label.text()
+            if browser and browser != "System default":
+                args["browser"] = browser
+        elif action_key == FILE_ACTION_KEY:
+            path = self._file_label.text()
+            if path and path != "No file selected":
+                args["path"] = path
+        elif action_key == SHELL_ACTION_KEY:
+            cmd_str = self._shell_edit.text().strip()
+            if cmd_str:
+                args["command"] = cmd_str
+
+        if _is_user_action(action_key):
+            name_raw = self._name_edit.text().strip()
+            # Truly empty: no name, no phrases, no args -- drop it.
+            if not name_raw and not phrases and not args:
+                return None
+            display_name = name_raw or "Untitled"
+            existing_slug = self._cmd.get("name", "")
+            would_generate = re.sub(r"[^a-z0-9]+", "_", display_name.strip().lower()).strip("_") or "command"
+            if existing_slug and existing_slug == would_generate:
+                slug = existing_slug
+                existing_slugs.add(slug)
+            else:
+                slug = _slug_from_name(display_name, existing_slugs)
+                existing_slugs.add(slug)
+        else:
+            # System action: name is fixed to match the action label.
+            # System rows preserve their original slug from disk so that
+            # 'Restore Defaults' can match them by name on subsequent loads.
+            label = _display_name_from_action(action_key)
+            existing_slug = self._cmd.get("name", "")
+            if existing_slug:
+                slug = existing_slug
+                existing_slugs.add(slug)
+            else:
+                slug = _slug_from_name(label, existing_slugs)
+                existing_slugs.add(slug)
+            display_name = label
+
+        result: dict = {
+            "name": slug,
+            "display_name": display_name,
+            "phrases": phrases,
+            "action": action_key,
+            "args": args,
+        }
+        for key in ("confirm", "cooldown", "threshold", "slots"):
+            if key in self._cmd:
+                result[key] = self._cmd[key]
+        return result
+
+
+# -- Commands container -------------------------------------------------------
+
+class CommandsContainer(QWidget):
+
+    dirtied = Signal()
+
+    def __init__(self, commands: list[dict], parent=None):
+        super().__init__(parent)
+        self._rows: list[CommandRow] = []
+        # Tracks which rows were added this session (not yet saved).
+        # These stay at the top regardless of sort.
+        self._new_rows: list[CommandRow] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        add_btn = QPushButton("+ Add Command")
+        add_btn.setFixedWidth(130)
+        add_btn.clicked.connect(self._add_blank_row)
+        layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addSpacing(8)
+
+        self._rows_layout = QVBoxLayout()
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(0)
+        layout.addLayout(self._rows_layout)
+        layout.addStretch()
+
+        # Sort existing commands: open A-Z, system A-Z, slot-pinned last.
+        visible_cmds = [c for c in commands if c.get("name") not in _HIDDEN_COMMANDS]
+        slot_cmds    = [c for c in visible_cmds if c.get("name") in _PINNED_SLOT_NAMES]
+        normal_cmds  = [c for c in visible_cmds if c.get("name") not in _PINNED_SLOT_NAMES]
+        normal_cmds.sort(key=_sort_key)
+
+        for cmd in normal_cmds:
+            self._append_row(CommandRow(cmd))
+
+        # Slot-pinned always at very bottom, fixed order.
+        for pinned in _PINNED_SLOT:
+            self._append_row(CommandRow(pinned))
+
+    def _prepend_row(self, row: CommandRow) -> None:
+        self._rows.insert(0, row)
+        self._rows_layout.insertWidget(0, row)
+        row.dirtied.connect(self.dirtied)
+
+    def _append_row(self, row: CommandRow) -> None:
+        self._rows.append(row)
+        self._rows_layout.addWidget(row)
+        row.dirtied.connect(self.dirtied)
+
+    def _add_blank_row(self) -> None:
+        blank = {"name": "", "phrases": [], "action": APP_ACTION_KEY, "args": {}}
+        row = CommandRow(blank)
+        row._expanded = True
+        row._body.setVisible(True)
+        self._new_rows.append(row)
+        self._prepend_row(row)
+        # Adding a row is itself a dirty change, even before the user types.
+        self.dirtied.emit()
+
+    def remove_row(self, row: CommandRow) -> None:
+        if row in self._rows:
+            self._rows.remove(row)
+            self._rows_layout.removeWidget(row)
+            row.deleteLater()
+            self.dirtied.emit()
+        self._new_rows = [r for r in self._new_rows if r is not row]
+
+    def collect(self) -> list[dict]:
+        slugs: set[str] = set()
+        result = []
+        for row in self._rows:
+            # NOTE: do NOT filter on row.isVisible() here. Qt reports widgets on
+            # inactive tabs as not-visible, so checking isVisible() would drop
+            # every command row whenever the user clicked Save from any tab
+            # other than Commands -- nuking the entire commands list and
+            # leaving only the _PINNED_SLOT entries appended below. Deleted
+            # rows are removed from self._rows by remove_row(), so iteration
+            # already excludes them.
+            if row._is_slot_pinned:
+                continue  # Collected separately below.
+            d = row.to_dict(slugs)
+            if d:
+                result.append(d)
+        # Pinned slot commands are always written to ensure they exist on disk.
+        for pinned in _PINNED_SLOT:
+            result.append(dict(pinned))
+        return result
+
+
+# -- Tab builder --------------------------------------------------------------
+
+def build(dialog: "SettingsDialog") -> QWidget:
+    """Build the Commands tab.
+
+    Mutates the dialog with:
+      dialog._wake_edit          -- QLineEdit for wake-words
+      dialog._commands_container -- the CommandsContainer instance
+
+    SettingsDialog._build_ui wires the dirty-tracking signals on both of
+    those after every tab has been built.
+    """
+    tab, cl = dialog._make_scroll_tab()
+    cl.addWidget(_section_label("Wake Words"))
+    wake_blurb = QLabel(
+        "One or more words or phrases that wake Voice Commander from sleep to listen for commands. "
+        "Separate multiple words or phrases with commas."
+    )
+    wake_blurb.setWordWrap(True)
+    wake_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
+    cl.addWidget(wake_blurb)
+
+    wake_row = QWidget()
+    wr = QHBoxLayout(wake_row)
+    wr.setContentsMargins(4, 0, 4, 0)
+    wr.setSpacing(8)
+    dialog._wake_edit = QLineEdit()
+    existing_words = dialog._config.get("wake_words")
+    if isinstance(existing_words, list) and existing_words:
+        dialog._wake_edit.setText(", ".join(existing_words))
+    else:
+        dialog._wake_edit.setText(dialog._config.get("wake_word", "computer"))
+    dialog._wake_edit.setPlaceholderText("computer")
+    dialog._wake_edit.textChanged.connect(dialog._check_restart_needed)
+    wr.addWidget(dialog._wake_edit)
+    cl.addWidget(wake_row)
+
+    cl.addWidget(_h_rule())
+    cl.addWidget(_section_label("Commands"))
+    commands_blurb = QLabel(
+        "Add commands using the Add Command button. For Launch app, Open URL, "
+        "Open file, and Run shell command, you can choose a custom name. "
+        "System action commands (volume, media, window, power) appear below "
+        "with locked names and actions; their phrases can still be edited."
+    )
+    commands_blurb.setWordWrap(True)
+    commands_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
+    cl.addWidget(commands_blurb)
+
+    cmd_frame = QFrame()
+    cmd_frame.setObjectName("cmdFrame")
+    cmd_frame.setFrameShape(QFrame.Shape.NoFrame)
+    cmd_fl = QVBoxLayout(cmd_frame)
+    cmd_fl.setContentsMargins(0, 0, 0, 0)
+    cmd_fl.setSpacing(0)
+    dialog._commands_container = CommandsContainer(dialog._config.get("commands", []))
+    cmd_fl.addWidget(dialog._commands_container)
+    cl.addWidget(cmd_frame)
+    cl.addStretch()
+    return tab

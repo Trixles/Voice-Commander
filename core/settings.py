@@ -1569,6 +1569,17 @@ class SettingsDialog(QDialog):
         how_blurb.setWordWrap(True)
         how_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
         cl.addWidget(how_blurb)
+
+        # Version footer. Pinned right above the trailing stretch so it sits
+        # at the bottom of the tab's content area regardless of blurb length.
+        from core import __version__ as _vc_version
+        version_lbl = QLabel(f"Voice Commander {_vc_version}")
+        version_lbl.setStyleSheet(
+            "color: #6c7086; font-size: 8pt; font-style: italic; padding: 8px 4px 0 4px;"
+        )
+        version_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+        cl.addWidget(version_lbl)
+
         cl.addStretch()
         return tab
 

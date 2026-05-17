@@ -13,13 +13,20 @@ core modules can import it without creating a circular dependency.
 All logic lives in core/. This file is intentionally thin.
 """
 
-__version__ = "0.3.0"
-
 import os
 import queue
 import sys
 import threading
 import time
+
+from core import __version__
+
+
+# Handle --version BEFORE importing Qt/Vosk so `voice-commander --version`
+# returns instantly without loading the GUI stack or the speech model.
+if __name__ == "__main__" and len(sys.argv) == 2 and sys.argv[1] in ("--version", "-V"):
+    print(f"voice-commander {__version__}")
+    sys.exit(0)
 
 import vosk
 from PySide6.QtWidgets import QApplication

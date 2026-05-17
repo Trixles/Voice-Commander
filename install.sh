@@ -39,6 +39,12 @@ readonly VOSK_DIR="${DATA_DIR}/vosk-model"
 readonly VOSK_MODEL_NAME="vosk-model-small-en-us-0.15"
 readonly VOSK_MODEL_URL="https://alphacephei.com/vosk/models/${VOSK_MODEL_NAME}.zip"
 
+# Extract __version__ from core/__init__.py so we can echo it on success.
+# Pure-bash read keeps install.sh self-sufficient (no need to install the
+# venv first just to query a version string).
+VC_VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "${REPO_DIR}/core/__init__.py")
+readonly VC_VERSION
+
 # -- Output helpers ----------------------------------------------------------
 c_reset='\033[0m'
 c_bold='\033[1m'
@@ -324,7 +330,7 @@ main() {
     enable_service
 
     echo
-    printf "${c_green}${c_bold}Voice Commander is installed and running.${c_reset}\n"
+    printf "${c_green}${c_bold}Voice Commander ${VC_VERSION} is installed and running.${c_reset}\n"
     echo
     printf "Check status:   ${c_bold}systemctl --user status voice-commander${c_reset}\n"
     printf "View logs:      ${c_bold}journalctl --user -u voice-commander -f${c_reset}\n"

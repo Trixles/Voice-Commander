@@ -304,9 +304,21 @@ EOF
 
 # -- Enable + start ----------------------------------------------------------
 enable_service() {
-    info "Enabling and starting service..."
-    systemctl --user enable --now "${APP_NAME}.service"
-    ok "Service enabled and started."
+    # `enable` is idempotent and ensures the service starts at next login.
+    # On re-install over a running instance, `enable --now` would NOT restart
+    # the existing process -- it would happily leave it running on stale code.
+    # So we enable unconditionally, then branch: restart if active, start if not.
+    systemctl --user enable "${APP_NAME}.service"
+
+    if systemctl --user is-active --quiet "${APP_NAME}.service"; then
+        info "Service is already running -- restarting to pick up new code..."
+        systemctl --user restart "${APP_NAME}.service"
+        ok "Service restarted."
+    else
+        info "Starting service..."
+        systemctl --user start "${APP_NAME}.service"
+        ok "Service started."
+    fi
 }
 
 # -- Main --------------------------------------------------------------------

@@ -84,7 +84,7 @@ companion — keep them in sync.
   override material.
 
 ### Non-slot matcher applies a tail-rescore guard
-- **What:** `_match_non_slot()` in `commands.py` computes the full
+- **What:** `_match_non_slot()` in `core/matcher.py` computes the full
   `SequenceMatcher.ratio()`, then — if heard and phrase share their
   leading token — computes a second ratio on just the rest and
   requires it to clear `TAIL_THRESHOLD` (0.60). Otherwise returns

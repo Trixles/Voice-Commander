@@ -116,10 +116,6 @@ def _is_user_action(action_key: str) -> bool:
     return action_key in _USER_ACTIONS
 
 
-def _has_slots(phrase: str) -> bool:
-    return "{" in phrase and "}" in phrase
-
-
 def _sort_key(cmd: dict) -> tuple:
     """
     Sort key for command rows on load.

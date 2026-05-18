@@ -61,6 +61,12 @@ class AppPickerDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Choose Application")
         self.setMinimumSize(360, 480)
+        # Match SettingsDialog's translucent setup so KWin's blur composites
+        # through. Without this, the QDialog { background-color: transparent }
+        # stylesheet rule has no effect -- Qt paints the default opaque
+        # widget background and the popup looks like a solid dark rectangle
+        # over whatever's behind it.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.chosen_exec: str | None = None
 
         self._apps = _load_desktop_apps()

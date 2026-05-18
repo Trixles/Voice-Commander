@@ -908,7 +908,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
 
                 for cmd, args, target in matches:
                     if target:
-                        _log.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target}")
+                        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target}")
                     print(f"[commands] Best match: '{cmd['name']}'")
                     _dispatch(cmd, args, gui_env, context)
 

@@ -19,7 +19,8 @@ which must remain Qt-free.
 import glob
 import os
 import re
-import subprocess
+
+from core.run import run_capture
 
 
 # Connector dir naming: /sys/class/drm/card<N>-<port>
@@ -72,9 +73,9 @@ def _parse_one(edid_path: str):
         OR edid-decode failed unexpectedly. Caller should show a fallback.
     """
     try:
-        result = subprocess.run(
+        result = run_capture(
             ["/usr/bin/edid-decode", edid_path],
-            capture_output=True, text=True, timeout=5,
+            timeout=5,
         )
     except Exception as e:
         print(f"[edid] edid-decode failed on {edid_path}: {e}")

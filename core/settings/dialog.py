@@ -57,7 +57,6 @@ Stash/restore:
 import json
 import os
 import re
-import subprocess
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QClipboard, QFont, QGuiApplication, QIcon
@@ -78,6 +77,7 @@ from core.aliases import (
 )
 from core.actions.windows import get_connected_outputs
 from core.env import GUI_ENV
+from core.run import run_capture
 from core.settings.style import STYLESHEET
 from core.settings.tabs.commands_tab import build as build_commands_tab
 from core.settings.tabs.overrides_tab import build as build_overrides_tab
@@ -408,10 +408,14 @@ class SettingsDialog(QDialog):
         if needs_restart:
             print("[settings] Restart-requiring setting changed -- restarting service.")
             try:
-                subprocess.run(
+                result = run_capture(
                     ["systemctl", "--user", "restart", "voice-commander"],
-                    check=True, timeout=10,
+                    timeout=10,
                 )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"systemctl exited {result.returncode}: {result.stderr.strip()}"
+                    )
                 print("[settings] Service restarted.")
             except Exception as e:
                 print(f"[settings] Service restart failed: {e}")

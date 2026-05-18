@@ -43,8 +43,8 @@ from core.actions.windows import refresh_monitor_map
 # -- Mic source --------------------------------------------------------------
 
 def _get_default_source() -> str:
-    import subprocess
-    result = subprocess.run(["pactl", "get-default-source"], capture_output=True, text=True)
+    from core.run import run_capture
+    result = run_capture(["pactl", "get-default-source"])
     return result.stdout.strip()
 
 

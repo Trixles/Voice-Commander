@@ -27,7 +27,6 @@ import inspect
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from datetime import datetime
@@ -48,6 +47,7 @@ from core.matcher import (
 from core.notify import notify as _notify
 from core.overrides import DEFAULT_OVERRIDES
 from core.paths import CONFIG_PATH
+from core.run import run_capture
 
 
 # -- Default mic phrase lists ------------------------------------------------
@@ -121,9 +121,9 @@ def _detect_default_browser() -> str | None:
     Returns the executable string (e.g. 'waterfox', '/opt/waterfox/waterfox')
     or None if detection fails."""
     try:
-        result = subprocess.run(
+        result = run_capture(
             ["xdg-settings", "get", "default-web-browser"],
-            capture_output=True, text=True, timeout=5,
+            timeout=5,
         )
         desktop_name = result.stdout.strip()
         if not desktop_name:
@@ -556,13 +556,62 @@ def _score_segment(heard: str) -> tuple[float, dict, dict, str | None] | None:
     return (best_score, best_cmd, best_args, target_output)
 
 
+# -- Chain segment matching ---------------------------------------------------
+
+def _match_chain_segments(
+    segments: list[str],
+) -> tuple[list[tuple[dict, dict, str | None]], bool, bool]:
+    """
+    Score each segment of a candidate chain and gather matches.
+
+    This is the false-positive defense for the deliberately-aggressive split
+    pattern in try_match() (" and | an | in "). The pattern WILL produce
+    false splits ("open mind and body" -> ["open mind", "body"]); a false
+    split won't produce a match for every segment, so chain_ok comes back
+    False and the caller falls through to single-match.
+
+    Returns (matches, chain_ok, chain_rejected):
+      - chain_ok=True, chain_rejected=False: every segment scored above
+        threshold. Chain is dispatchable.
+      - chain_ok=False, chain_rejected=False: at least one segment didn't
+        score. Treat as a misparse and fall through to single-match.
+      - chain_ok=False, chain_rejected=True: segments scored but a rule
+        refused (confirm-required, cooldown). Caller should return False
+        immediately -- the user clearly meant a chain; firing half of it
+        via the single-match rescue would be worse than firing nothing.
+    """
+    matches: list[tuple[dict, dict, str | None]] = []
+    for seg in segments:
+        result = _score_segment(seg)
+        if result is None:
+            return matches, False, False
+        _score, cmd, args, target = result
+        if cmd.get("confirm"):
+            print(f"[commands] Chain aborted: '{cmd['name']}' requires confirmation")
+            LOG_BUFFER.append(
+                f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' requires confirmation"
+            )
+            return matches, False, True
+        cooldown = cmd.get("cooldown", DEFAULT_COOLDOWN)
+        if cooldown > 0:
+            last = _last_fired.get(cmd["name"], 0.0)
+            if time.time() - last < cooldown:
+                print(f"[commands] Chain aborted: '{cmd['name']}' on cooldown")
+                LOG_BUFFER.append(
+                    f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' on cooldown"
+                )
+                return matches, False, True
+        matches.append((cmd, args, target))
+    return matches, True, False
+
+
 # -- Dispatcher ---------------------------------------------------------------
 
 def _get_current_volume(gui_env: dict) -> str:
     try:
-        result = subprocess.run(
+        result = run_capture(
             ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
-            capture_output=True, text=True, timeout=2, env=gui_env,
+            env=gui_env, timeout=2,
         )
         for part in result.stdout.split("/"):
             part = part.strip()
@@ -725,12 +774,19 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
         return False
 
     # -- Try chained commands first -------------------------------------------
-    # Split on " and ", " an ", or " in " (common Vosk mishearings of "and").
-    # Only accept the split if every segment matches a command.
+    # Split aggressively on " and ", " an ", or " in " -- the latter two are
+    # common Vosk mishearings of "and" (the Blue Yeti reliably hears "and" as
+    # "in"; cheaper mics do too). The pattern WILL produce false-positive
+    # splits like "open mind and body" -> ["open mind", "body"]. The defense
+    # is _match_chain_segments(), which requires every segment to score
+    # above threshold -- a bogus split won't satisfy that, and we fall
+    # through to single-match. Chained commands are a primary feature, so
+    # the aggressive split is deliberate; the per-segment match requirement
+    # is what makes it safe.
     #
     # Two failure modes, handled differently:
-    #  - chain_ok=False: segments didn't all match (e.g. "open mind and body"
-    #    isn't really a chain). Fall through to single-match.
+    #  - chain_ok=False, chain_rejected=False: segments didn't all match
+    #    (likely a false-positive split). Fall through to single-match.
     #  - chain_rejected=True: segments matched but a rule refused the chain
     #    (confirm-required, cooldown, multi-URL cross-monitor). User intent
     #    was clear; firing a partial match would be worse than nothing.
@@ -738,33 +794,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
     if chain_pattern.search(heard):
         segments = [s.strip() for s in chain_pattern.split(heard) if s.strip()]
         if len(segments) >= 2:
-            matches = []
-            chain_ok = True
-            chain_rejected = False
-            for seg in segments:
-                result = _score_segment(seg)
-                if result is None:
-                    chain_ok = False
-                    break
-                score, cmd, args, target = result
-                # Don't allow confirm-required commands in chains
-                if cmd.get("confirm"):
-                    print(f"[commands] Chain aborted: '{cmd['name']}' requires confirmation")
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' requires confirmation")
-                    chain_ok = False
-                    chain_rejected = True
-                    break
-                # Cooldown check per segment
-                cooldown = cmd.get("cooldown", DEFAULT_COOLDOWN)
-                if cooldown > 0:
-                    last = _last_fired.get(cmd["name"], 0.0)
-                    if time.time() - last < cooldown:
-                        print(f"[commands] Chain aborted: '{cmd['name']}' on cooldown")
-                        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' on cooldown")
-                        chain_ok = False
-                        chain_rejected = True
-                        break
-                matches.append((cmd, args, target))
+            matches, chain_ok, chain_rejected = _match_chain_segments(segments)
 
             # Trailing-target propagation. When only the LAST segment carries
             # an explicit "on {alias}" and every earlier segment is untargeted,

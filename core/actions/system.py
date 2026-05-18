@@ -11,7 +11,7 @@ Power commands (shutdown, restart, logout) use systemctl / loginctl,
 which work correctly from a user session and don't need sudo.
 """
 
-import subprocess
+from core.run import run_bg, run_capture
 
 
 # -- Volume word-to-int -------------------------------------------------------
@@ -47,7 +47,7 @@ def _parse_level(raw: str) -> int:
 
 def volume_up(gui_env: dict, percent: int = 10, context=None) -> None:
     """Raise default sink volume by `percent`%."""
-    subprocess.run(
+    run_capture(
         ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"+{percent}%"],
         env=gui_env,
     )
@@ -55,7 +55,7 @@ def volume_up(gui_env: dict, percent: int = 10, context=None) -> None:
 
 def volume_down(gui_env: dict, percent: int = 10, context=None) -> None:
     """Lower default sink volume by `percent`%."""
-    subprocess.run(
+    run_capture(
         ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"-{percent}%"],
         env=gui_env,
     )
@@ -72,7 +72,7 @@ def set_volume(level: str, gui_env: dict, context=None) -> None:
         print(f"[system] set_volume: {e}")
         return
     value = max(0, min(100, value))
-    subprocess.run(
+    run_capture(
         ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{value}%"],
         env=gui_env,
     )
@@ -80,7 +80,7 @@ def set_volume(level: str, gui_env: dict, context=None) -> None:
 
 def mute(gui_env: dict, context=None) -> None:
     """Mute the default sink unconditionally."""
-    subprocess.run(
+    run_capture(
         ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"],
         env=gui_env,
     )
@@ -88,7 +88,7 @@ def mute(gui_env: dict, context=None) -> None:
 
 def unmute(gui_env: dict, context=None) -> None:
     """Unmute the default sink unconditionally."""
-    subprocess.run(
+    run_capture(
         ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"],
         env=gui_env,
     )
@@ -98,27 +98,27 @@ def unmute(gui_env: dict, context=None) -> None:
 
 def media_pause(gui_env: dict, context=None) -> None:
     """Pause the active MPRIS media player."""
-    subprocess.Popen(["playerctl", "pause"], env=gui_env)
+    run_bg(["playerctl", "pause"], env=gui_env)
 
 
 def media_resume(gui_env: dict, context=None) -> None:
     """Resume the active MPRIS media player."""
-    subprocess.Popen(["playerctl", "play"], env=gui_env)
+    run_bg(["playerctl", "play"], env=gui_env)
 
 
 # -- Power --------------------------------------------------------------------
 
 def shutdown(gui_env: dict, context=None) -> None:
-    subprocess.Popen(["systemctl", "poweroff"], env=gui_env)
+    run_bg(["systemctl", "poweroff"], env=gui_env)
 
 
 def restart(gui_env: dict, context=None) -> None:
-    subprocess.Popen(["systemctl", "reboot"], env=gui_env)
+    run_bg(["systemctl", "reboot"], env=gui_env)
 
 
 def logout(gui_env: dict, context=None) -> None:
     """Log out of the current KDE Plasma 6 session via dbus-send."""
-    subprocess.Popen(
+    run_bg(
         ["dbus-send", "--session", "--print-reply",
          "--dest=org.kde.Shutdown", "/Shutdown",
          "org.kde.Shutdown.logout"],
@@ -138,7 +138,7 @@ def run_command(command: str, gui_env: dict, context=None) -> None:
     if not command or not command.strip():
         print("[system] run_command: empty command, skipping")
         return
-    subprocess.Popen(command, shell=True, env=gui_env, start_new_session=True)
+    run_bg(command, shell=True, env=gui_env, detach=True)
 
 
 # -- Settings UI --------------------------------------------------------------

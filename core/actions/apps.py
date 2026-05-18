@@ -9,15 +9,16 @@ under a systemd user service with no active desktop session.
 """
 
 import os
-import subprocess
 import threading
 import time
+
+from core.run import run_bg, run_capture
 
 
 def _raise_browser(gui_env: dict) -> None:
     """Wait briefly for the browser to open the tab, then raise it via kglobalaccel."""
     time.sleep(0.5)
-    subprocess.run(
+    run_capture(
         [
             "dbus-send", "--session", "--print-reply",
             "--dest=org.kde.kglobalaccel",
@@ -25,7 +26,7 @@ def _raise_browser(gui_env: dict) -> None:
             "org.kde.kglobalaccel.Component.invokeShortcut",
             "string:Activate Window Demanding Attention",
         ],
-        capture_output=True, env=gui_env,
+        env=gui_env,
     )
 
 
@@ -38,9 +39,9 @@ def open_url(url: str, gui_env: dict, browser: str = "", context=None) -> None:
     URL in the system default browser.
     """
     if browser:
-        subprocess.Popen([browser, url], env=gui_env, start_new_session=True)
+        run_bg([browser, url], env=gui_env, detach=True)
     else:
-        subprocess.Popen(["xdg-open", url], env=gui_env, start_new_session=True)
+        run_bg(["xdg-open", url], env=gui_env, detach=True)
     threading.Thread(target=_raise_browser, args=(gui_env,), daemon=True).start()
     if context:
         context.update(last_command_name="open_url")
@@ -48,7 +49,7 @@ def open_url(url: str, gui_env: dict, browser: str = "", context=None) -> None:
 
 def launch_app(app: str, gui_env: dict, context=None) -> None:
     """Launch an application by executable name."""
-    subprocess.Popen([app], env=gui_env, start_new_session=True)
+    run_bg([app], env=gui_env, detach=True)
     if context:
         context.update(last_app=app, last_command_name="launch_app")
 
@@ -65,12 +66,12 @@ def open_file(path: str, gui_env: dict, context=None) -> None:
         return
     if not os.path.exists(path):
         print(f"[apps] open_file: path does not exist: {path}")
-        subprocess.Popen(
+        run_bg(
             ["notify-send", "--app-name=Voice Commander", "--expire-time=3000",
              "File not found", f"Path does not exist:\n{path}"],
             env=gui_env,
         )
         return
-    subprocess.Popen(["xdg-open", path], env=gui_env, start_new_session=True)
+    run_bg(["xdg-open", path], env=gui_env, detach=True)
     if context:
         context.update(last_command_name="open_file")

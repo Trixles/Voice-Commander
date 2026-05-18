@@ -25,9 +25,9 @@ xvf_host commands used:
 
 import logging
 import shutil
-import subprocess
 
 from core.context import State
+from core.run import run_capture
 
 log = logging.getLogger(__name__)
 
@@ -52,12 +52,7 @@ if _XVF_HOST is None:
 def _run(cmd: list[str]) -> None:
     """Fire-and-forget subprocess call. Logs on failure, never raises."""
     try:
-        subprocess.run(
-            cmd,
-            timeout=2,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        run_capture(cmd, timeout=2)
     except Exception as exc:
         log.debug("respeaker: xvf_host call failed: %s", exc)
 

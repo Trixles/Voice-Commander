@@ -25,11 +25,11 @@ pattern as the screen-move shortcuts.
 import json
 import os
 import re
-import subprocess
 
 from core.edid import get_monitor_friendly_names
 from core.matcher import _similarity
 from core.paths import CONFIG_PATH
+from core.run import run_bg, run_capture
 
 
 # Cached output-name -> KWin screen index mapping.
@@ -56,10 +56,9 @@ def refresh_monitor_map(gui_env: dict) -> None:
     global _output_to_screen
 
     try:
-        result = subprocess.run(
+        result = run_capture(
             ["/usr/bin/kscreen-doctor", "-o"],
-            capture_output=True, text=True, timeout=5,
-            env=gui_env,
+            env=gui_env, timeout=5,
         )
     except Exception as e:
         print(f"[windows] kscreen-doctor failed: {e}")
@@ -141,7 +140,7 @@ def write_next_screen(output_name: str, gui_env: dict) -> None:
     )
 
     try:
-        subprocess.run(
+        result = run_capture(
             [
                 "kwriteconfig6",
                 "--file", os.path.expanduser("~/.config/kwinrc"),
@@ -149,11 +148,14 @@ def write_next_screen(output_name: str, gui_env: dict) -> None:
                 "--key", "nextScreen",
                 output_name,
             ],
-            env=gui_env, check=True,
-            capture_output=True, text=True,
+            env=gui_env,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"kwriteconfig6 exited {result.returncode}: {result.stderr.strip()}"
+            )
 
-        subprocess.run(
+        run_capture(
             [
                 "dbus-send", "--session", "--print-reply",
                 "--dest=org.kde.KWin", "/Scripting",
@@ -162,7 +164,7 @@ def write_next_screen(output_name: str, gui_env: dict) -> None:
             ],
             env=gui_env,
         )
-        subprocess.run(
+        run_capture(
             [
                 "dbus-send", "--session", "--print-reply",
                 "--dest=org.kde.KWin", "/Scripting",
@@ -172,7 +174,7 @@ def write_next_screen(output_name: str, gui_env: dict) -> None:
             ],
             env=gui_env,
         )
-        subprocess.run(
+        run_capture(
             [
                 "dbus-send", "--session", "--print-reply",
                 "--dest=org.kde.KWin", "/Scripting",
@@ -244,7 +246,7 @@ def move_window_to_monitor(alias: str, gui_env: dict, context=None) -> None:
 
     shortcut_name = f"Window to Screen {screen_index}"
 
-    subprocess.Popen(
+    run_bg(
         [
             "dbus-send", "--session", "--print-reply",
             "--dest=org.kde.kglobalaccel",
@@ -261,7 +263,7 @@ def move_window_to_monitor(alias: str, gui_env: dict, context=None) -> None:
 
 def maximize_window(gui_env: dict, context=None) -> None:
     """Maximize the active window via the 'Window Maximize' KWin global shortcut."""
-    subprocess.Popen(
+    run_bg(
         [
             "dbus-send", "--session", "--print-reply",
             "--dest=org.kde.kglobalaccel",
@@ -280,7 +282,7 @@ def move_window_left(gui_env: dict, context=None) -> None:
     Move the active window one monitor to the left via the
     'Window One Screen to the Left' KWin global shortcut.
     """
-    subprocess.Popen(
+    run_bg(
         [
             "dbus-send", "--session", "--print-reply",
             "--dest=org.kde.kglobalaccel",
@@ -299,7 +301,7 @@ def move_window_right(gui_env: dict, context=None) -> None:
     Move the active window one monitor to the right via the
     'Window One Screen to the Right' KWin global shortcut.
     """
-    subprocess.Popen(
+    run_bg(
         [
             "dbus-send", "--session", "--print-reply",
             "--dest=org.kde.kglobalaccel",
@@ -318,7 +320,7 @@ def close_window(gui_env: dict, context=None) -> None:
     Close the active window by invoking the 'Window Close' KWin global shortcut
     via kglobalaccel.
     """
-    subprocess.Popen(
+    run_bg(
         [
             "dbus-send", "--session", "--print-reply",
             "--dest=org.kde.kglobalaccel",

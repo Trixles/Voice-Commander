@@ -34,6 +34,7 @@ import vosk
 from core.context import Context, State
 from core.log_buffer import LOG_BUFFER
 from core.notify import notify as _notify
+from core.run import run_capture
 from core.wake import WakeWordDetector
 import core.commands as commands
 import core.overrides as overrides
@@ -68,11 +69,14 @@ _HALLUCINATION_STOPWORDS = {"the", "a", "an", "uh", "um", "huh", "oh", "and", "i
 # -- Helpers ------------------------------------------------------------------
 
 def _get_default_source() -> str:
-    result = subprocess.run(["pactl", "get-default-source"], capture_output=True, text=True)
+    result = run_capture(["pactl", "get-default-source"])
     return result.stdout.strip()
 
 
 def _open_pw_record(source: str) -> subprocess.Popen:
+    # Not routed through core.run: pw-record is a long-running streaming
+    # process whose stdout we read from a thread and which we .kill() on
+    # mic toggle. Neither run_bg nor run_capture models this lifecycle.
     return subprocess.Popen(
         ["pw-record", f"--target={source}", "--format=s16", "--rate=16000", "--channels=1", "-"],
         stdout=subprocess.PIPE,
@@ -280,7 +284,7 @@ def run_listener(
                         print("[listener] Quit command received, stopping.")
                         proc.kill()
                         return
-            except Exception:
+            except queue.Empty:
                 pass
 
         if not rec.AcceptWaveform(data):

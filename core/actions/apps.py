@@ -12,6 +12,7 @@ import os
 import threading
 import time
 
+from core.notify import notify
 from core.run import run_bg, run_capture
 
 
@@ -66,11 +67,8 @@ def open_file(path: str, gui_env: dict, context=None) -> None:
         return
     if not os.path.exists(path):
         print(f"[apps] open_file: path does not exist: {path}")
-        run_bg(
-            ["notify-send", "--app-name=Voice Commander", "--expire-time=3000",
-             "File not found", f"Path does not exist:\n{path}"],
-            env=gui_env,
-        )
+        notify("File not found", f"Path does not exist:\n{path}",
+               timeout_ms=3000, gui_env=gui_env)
         return
     run_bg(["xdg-open", path], env=gui_env, detach=True)
     if context:

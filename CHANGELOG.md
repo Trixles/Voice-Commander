@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] &mdash; 2026-05-17
+
+### Changed
+- Internal refactor: matching pipeline lifted from `core/commands.py`
+  into `core/matcher.py`. The pure scoring helpers
+  (`_has_slots`, `_phrase_to_regex`, `_extract_slots`,
+  `_resolve_slot`, `_match_non_slot`) and `TAIL_THRESHOLD` now live
+  in the matcher module, which is registry-free and unit-testable
+  in isolation. The orchestrator `_score_segment` stays in
+  `commands.py` next to the command registry it walks.
+- Internal refactor: all subprocess invocations now go through a new
+  `core/run.py` wrapper module (`run_bg` for fire-and-forget,
+  `run_capture` for run-and-wait). Two intentional exceptions stay
+  raw with explanatory comments: the listener's streaming
+  `pw-record` process and the standalone `core/notify.py` module.
+- Chain segment matching extracted into a named helper
+  `_match_chain_segments()` and the chain-block comment in
+  `try_match()` rewritten to spell out that the aggressive
+  `" and | an | in "` split pattern is deliberate &mdash; the
+  per-segment match requirement is the false-positive defense.
+- Per-comparison matcher debug output (`'X' vs 'Y': 0.62 ...`) is
+  now gated on the `VC_DEBUG_MATCHER=1` environment variable.
+  Off by default; `journalctl -u voice-commander` is dramatically
+  quieter. Set `Environment=VC_DEBUG_MATCHER=1` in the systemd unit
+  to debug specific (mis)matches.
+
+### Fixed
+- Latent `NameError` in chained-command dispatch: the per-segment
+  "Target monitor" log call referenced an undefined `_log` instead
+  of `LOG_BUFFER`. Would have raised the moment a chained command
+  carried an `on {alias}` target. Now uses `LOG_BUFFER` like every
+  other call in the file.
+- Listener's command-queue drain caught `Exception` instead of
+  `queue.Empty`, silently swallowing any real bug in the drain
+  loop. Now tightened to `queue.Empty` only.
+- `open_file` action's "file not found" notification went through
+  a raw `notify-send` call that did not pass `gui_env`, almost
+  certainly silently failing under the systemd user service.
+  Now routes through `core.notify.notify()` like every other
+  notification.
+
 ## [0.4.0] &mdash; 2026-05-16
 
 ### Added

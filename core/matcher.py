@@ -13,8 +13,16 @@ Keeping this module Qt-free and registry-free lets the matching
 pipeline be unit-tested in isolation.
 """
 
+import os
 import re
 from difflib import SequenceMatcher
+
+
+# Per-comparison debug output is gated on VC_DEBUG_MATCHER=1. Off by
+# default since _match_non_slot prints once per (heard, phrase) pair --
+# noisy in journalctl. Flip it on when debugging why a command did or
+# didn't match (in a systemd unit, add Environment=VC_DEBUG_MATCHER=1).
+_DEBUG = os.environ.get("VC_DEBUG_MATCHER") == "1"
 
 
 # Tail-rescore threshold for non-slot fuzzy matches whose leading token is
@@ -105,10 +113,13 @@ def _match_non_slot(heard: str, phrase: str) -> float:
         p_tail = " ".join(p_tokens[1:])
         tail = _similarity(h_tail, p_tail)
         if tail < TAIL_THRESHOLD:
-            print(f"  '{heard}' vs '{phrase}': {overall:.2f} (tail {tail:.2f} < {TAIL_THRESHOLD} -- rejected)")
+            if _DEBUG:
+                print(f"  '{heard}' vs '{phrase}': {overall:.2f} (tail {tail:.2f} < {TAIL_THRESHOLD} -- rejected)")
             return 0.0
-        print(f"  '{heard}' vs '{phrase}': {overall:.2f} (tail {tail:.2f})")
+        if _DEBUG:
+            print(f"  '{heard}' vs '{phrase}': {overall:.2f} (tail {tail:.2f})")
         return overall
 
-    print(f"  '{heard}' vs '{phrase}': {overall:.2f}")
+    if _DEBUG:
+        print(f"  '{heard}' vs '{phrase}': {overall:.2f}")
     return overall

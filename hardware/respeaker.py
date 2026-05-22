@@ -24,7 +24,9 @@ xvf_host commands used:
 """
 
 import logging
+import os
 import shutil
+import time
 
 from core.context import State
 from core.run import run_capture
@@ -43,8 +45,35 @@ _STATE_COLORS = {
     State.ERROR:      "0xffc400",
 }
 
+# Minimum delay between xvf_host commands. Seeed's reference Python example
+# uses 5ms between commands; without it, the XVF3800 firmware can drop the
+# second or third command in a rapid burst.
+_INTER_CMD_DELAY = 0.005
+
+
+def _find_xvf_host() -> str | None:
+    """Locate xvf_host, falling back to well-known install paths.
+
+    `shutil.which` honors PATH, which the systemd user service does NOT
+    inherit from the user's interactive shell. Fall back to common install
+    locations so LED control works regardless of how VC was launched.
+    """
+    found = shutil.which("xvf_host")
+    if found:
+        return found
+    fallbacks = [
+        os.path.expanduser("~/.local/bin/xvf_host"),
+        "/usr/local/bin/xvf_host",
+        "/usr/bin/xvf_host",
+    ]
+    for path in fallbacks:
+        if os.access(path, os.X_OK):
+            return path
+    return None
+
+
 # -- Detect xvf_host once at import time
-_XVF_HOST = shutil.which("xvf_host")
+_XVF_HOST = _find_xvf_host()
 if _XVF_HOST is None:
     log.warning("respeaker: xvf_host not found on PATH -- LED control disabled")
 
@@ -71,5 +100,7 @@ def set_state(state) -> None:
         return
 
     _run([_XVF_HOST, "LED_EFFECT", "3"])
+    time.sleep(_INTER_CMD_DELAY)
     _run([_XVF_HOST, "LED_COLOR", color])
+    time.sleep(_INTER_CMD_DELAY)
     _run([_XVF_HOST, "LED_BRIGHTNESS", _BRIGHTNESS])

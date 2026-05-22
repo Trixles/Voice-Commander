@@ -145,9 +145,41 @@ check_prereqs() {
     # Optional: ReSpeaker xvf_host. Not a blocker.
     if command -v xvf_host >/dev/null 2>&1; then
         ok "ReSpeaker xvf_host detected -- LED control will be enabled."
+        check_respeaker_udev
     else
         info "ReSpeaker xvf_host not found -- LED control disabled (this is normal)."
     fi
+}
+
+# -- ReSpeaker udev rule check ----------------------------------------------
+# xvf_host needs write access to the USB device (VID 2886 / PID 001A) to
+# control the LED ring. Without a udev rule, the device's default permissions
+# either deny writes outright (LED stays whatever it booted into) or grant
+# them only intermittently via uaccess (works until you replug).
+#
+# We don't install the rule ourselves -- that requires sudo, and install.sh
+# is deliberately a userland install. Instead: detect, and print a clear
+# one-liner the user can copy-paste if the rule is missing.
+check_respeaker_udev() {
+    local rule_file="/etc/udev/rules.d/99-respeaker.rules"
+    if [[ -f "${rule_file}" ]] && grep -q '2886' "${rule_file}" 2>/dev/null; then
+        ok "ReSpeaker udev rule already installed."
+        return
+    fi
+
+    warn "ReSpeaker udev rule not found at ${rule_file}."
+    printf "   Without it, xvf_host may not be able to write to the device,\n"
+    printf "   and the LED won't change to reflect VC state.\n"
+    printf "   To install the rule, run:\n"
+    printf "\n"
+    printf "     ${c_bold}sudo tee ${rule_file} <<'EOF'\n"
+    printf "     SUBSYSTEM==\"usb\", ATTR{idVendor}==\"2886\", ATTR{idProduct}==\"001a\", MODE=\"0666\"\n"
+    printf "     EOF\n"
+    printf "     sudo udevadm control --reload-rules\n"
+    printf "     sudo udevadm trigger${c_reset}\n"
+    printf "\n"
+    printf "   Then unplug and replug the ReSpeaker. (You can do this any\n"
+    printf "   time -- install will continue without it.)\n"
 }
 
 # -- Python version check ----------------------------------------------------

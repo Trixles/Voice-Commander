@@ -84,6 +84,15 @@ class VoiceCommanderTray:
         self._timer.timeout.connect(self._poll_state)
         self._timer.start()
 
+        # LED re-sync heartbeat: re-assert current state to the ReSpeaker
+        # every 3s so the LED recovers if the device is unplugged and
+        # replugged (the device boots into its own default LED state and
+        # has no way to know what VC's current state is otherwise).
+        # Cheap: 3 subprocess calls every 3s, all no-ops if xvf_host is
+        # absent.
+        self._led_heartbeat_tick = 0
+        self._led_heartbeat_period = 12  # 12 * 250ms = 3000ms
+
     def _load_icon(self, state) -> QIcon:
         filename = ICON_MAP.get(state, "state-error.svg")
         return QIcon(_icon_path(filename))
@@ -137,6 +146,12 @@ class VoiceCommanderTray:
                 respeaker.set_state(state)
         except queue.Empty:
             pass
+
+        # LED re-sync heartbeat. See __init__ for rationale.
+        self._led_heartbeat_tick += 1
+        if self._led_heartbeat_tick >= self._led_heartbeat_period:
+            self._led_heartbeat_tick = 0
+            respeaker.set_state(self._current_state)
 
     def _quit(self) -> None:
         self._command_queue.put("quit")

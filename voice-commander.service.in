@@ -15,6 +15,10 @@ PartOf=graphical-session.target
 [Service]
 Type=simple
 Environment=PYTHONUNBUFFERED=1
+# Ensure xvf_host (~/.local/bin) is reachable. systemd user services don't
+# inherit PATH from the user's shell; without this, LED control silently
+# disables itself when xvf_host isn't in the default service PATH.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
 ExecStart=@VENV_PYTHON@ @APP_DIR@/voice_commander.py
 Restart=on-failure
 RestartSec=5

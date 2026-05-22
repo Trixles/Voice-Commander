@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.0] &mdash; 2026-05-17
+## [0.5.0] &mdash; 2026-05-22
+
+### Added
+- `voice-commander --version` (also `-V`) CLI flag. Prints the version
+  string and exits without loading Qt or the Vosk model, so it's
+  instant. The version is also surfaced on the About tab of the
+  settings dialog.
+- Matcher unit test suite (`tests/test_matcher.py`) covering scoring,
+  slot extraction, the tail-rescore guard, and chain dispatch. Qt /
+  Vosk / subprocess-free; runs from the repo root with `pytest -q`
+  in well under a second.
 
 ### Changed
 - Internal refactor: matching pipeline lifted from `core/commands.py`
@@ -22,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run_capture` for run-and-wait). Two intentional exceptions stay
   raw with explanatory comments: the listener's streaming
   `pw-record` process and the standalone `core/notify.py` module.
+- Internal refactor: settings UI split out of the single 2300-line
+  `core/settings.py` into a `core/settings/` package &mdash; `dialog.py`,
+  `helpers.py`, `style.py`, and one module per tab under
+  `core/settings/tabs/`. No user-visible change.
+- Internal refactor: small leaf modules (log buffer, desktop-app
+  scanner, notification helper, path constants, matcher stub) lifted
+  out of `core/commands.py` and `core/settings.py` into their own
+  files. Default phrase lists centralized in `core/commands.py`. No
+  user-visible change.
 - Chain segment matching extracted into a named helper
   `_match_chain_segments()` and the chain-block comment in
   `try_match()` rewritten to spell out that the aggressive
@@ -32,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Off by default; `journalctl -u voice-commander` is dramatically
   quieter. Set `Environment=VC_DEBUG_MATCHER=1` in the systemd unit
   to debug specific (mis)matches.
+- `install.sh` now restarts the service when re-installed over a
+  running instance. Previously the existing process would keep
+  running on the old code until you manually restarted it &mdash;
+  an easy footgun while iterating on the source.
 
 ### Fixed
 - Latent `NameError` in chained-command dispatch: the per-segment
@@ -47,6 +70,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certainly silently failing under the systemd user service.
   Now routes through `core.notify.notify()` like every other
   notification.
+- App picker dialog (Settings &raquo; Commands &raquo; Launch app)
+  rendered with an opaque corner background that didn't match the
+  rest of the settings UI. Now translucent like its parent dialog.
+- ReSpeaker XVF3800 LED ring could get stuck on the wrong color after
+  the mic was unplugged and replugged &mdash; the device reboots into
+  its own default LED state with no way to know Voice Commander's. The
+  tray now re-asserts the current LED state every 3 seconds, so the
+  ring recovers on its own. `xvf_host` discovery also falls back to
+  common install paths (`~/.local/bin`, `/usr/local/bin`, `/usr/bin`)
+  since the systemd user service doesn't inherit your shell `PATH`,
+  and a 5ms delay between LED commands keeps the firmware from dropping
+  a color change. When the required udev rule for the device is
+  missing, `install.sh` now detects it and prints a copy-pasteable
+  command to install it.
 
 ## [0.4.0] &mdash; 2026-05-16
 

@@ -500,11 +500,28 @@ def _wm_class_hint(cmd: dict) -> str:
 
 # -- Single-segment scoring ---------------------------------------------------
 
-def _score_segment(heard: str) -> tuple[float, dict, dict, str | None] | None:
+def _score_segment(
+    heard: str,
+) -> tuple[float, dict, dict, str | None] | tuple[str, dict] | None:
     """
     Score a single heard segment against all commands.
-    Returns (score, cmd, resolved_args, target_output) for the best match,
-    or None if nothing clears the threshold.
+
+    Three possible return shapes:
+      - (score, cmd, resolved_args, target_output): the best match, enabled
+        and dispatchable.
+      - ("disabled", cmd): the best match scored above threshold but its
+        ``enabled`` flag is False. The caller is expected to notify the user
+        and NOT dispatch. The sentinel is a 2-tuple whose first element is the
+        literal string "disabled"; a normal match's first element is a float
+        score, so callers can tell them apart with ``result[0] == "disabled"``.
+      - None: nothing cleared the threshold.
+
+    Scoring deliberately IGNORES ``enabled``: the best match is chosen purely
+    on score, and only then is the flag checked. Doing it the other way --
+    filtering disabled commands out of candidacy before scoring -- would let an
+    enabled but lower-scoring command shadow a disabled higher-scoring one. The
+    user would then get feedback for the wrong command, or none at all. The
+    "disabled" notification must fire when the BEST match is the disabled one.
 
     Handles "on [alias]" detection and stripping per-segment.
     """
@@ -553,6 +570,12 @@ def _score_segment(heard: str) -> tuple[float, dict, dict, str | None] | None:
     if best_cmd is None:
         return None
 
+    # Best match found on score alone (above). Now -- and only now -- consult
+    # the enabled flag. Absent key means enabled (back-compat with pre-0.6.0
+    # configs that never had the field).
+    if not best_cmd.get("enabled", True):
+        return ("disabled", best_cmd)
+
     return (best_score, best_cmd, best_args, target_output)
 
 
@@ -560,7 +583,7 @@ def _score_segment(heard: str) -> tuple[float, dict, dict, str | None] | None:
 
 def _match_chain_segments(
     segments: list[str],
-) -> tuple[list[tuple[dict, dict, str | None]], bool, bool]:
+) -> tuple[list, bool, bool]:
     """
     Score each segment of a candidate chain and gather matches.
 
@@ -570,21 +593,36 @@ def _match_chain_segments(
     split won't produce a match for every segment, so chain_ok comes back
     False and the caller falls through to single-match.
 
+    Each entry in `matches` is one of two shapes:
+      - (cmd, args, target): a normal, dispatchable segment.
+      - ("disabled", cmd): a segment whose best match is disabled in Settings.
+        It counts as "matched" for chain validity (so it does NOT flip
+        chain_ok to False), but the caller notifies instead of dispatching.
+
     Returns (matches, chain_ok, chain_rejected):
-      - chain_ok=True, chain_rejected=False: every segment scored above
-        threshold. Chain is dispatchable.
+      - chain_ok=True, chain_rejected=False: every segment matched (enabled or
+        disabled). Chain is dispatchable; disabled entries notify-and-skip.
       - chain_ok=False, chain_rejected=False: at least one segment didn't
         score. Treat as a misparse and fall through to single-match.
       - chain_ok=False, chain_rejected=True: segments scored but a rule
         refused (confirm-required, cooldown). Caller should return False
         immediately -- the user clearly meant a chain; firing half of it
         via the single-match rescue would be worse than firing nothing.
+        Disabled segments never trigger this: confirm/cooldown rules belong to
+        enabled commands and take precedence (a disabled segment sitting next
+        to a confirm-required one still aborts the chain).
     """
-    matches: list[tuple[dict, dict, str | None]] = []
+    matches: list = []
     for seg in segments:
         result = _score_segment(seg)
         if result is None:
             return matches, False, False
+        if result[0] == "disabled":
+            # Matched but disabled: ride along as a sentinel, do not abort.
+            # Confirm/cooldown checks are skipped here -- a disabled command
+            # never fires, so those rules are moot for it.
+            matches.append(result)
+            continue
         _score, cmd, args, target = result
         if cmd.get("confirm"):
             print(f"[commands] Chain aborted: '{cmd['name']}' requires confirmation")
@@ -749,6 +787,17 @@ def _dispatch_with_monitor(cmd: dict, args: dict, target_output: str | None,
     _dispatch(cmd, args, gui_env, context)
 
 
+def _notify_disabled(cmd: dict, gui_env: dict) -> None:
+    """Notify (and log) that a matched command is disabled in Settings, then
+    return without dispatching. Shared by the single-match and chain paths in
+    try_match. Kept short on purpose -- Plasma truncates notifications."""
+    display = cmd.get("display_name") or cmd.get("name")
+    msg = f"{display} is disabled in Settings"
+    print(f"[commands] {msg}")
+    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! {msg}")
+    _notify(msg, gui_env=gui_env)
+
+
 # -- Main entry point ---------------------------------------------------------
 
 def try_match(heard: str, gui_env: dict, context) -> bool:
@@ -796,6 +845,17 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
         if len(segments) >= 2:
             matches, chain_ok, chain_rejected = _match_chain_segments(segments)
 
+            # Split matched segments into the dispatchable ones and the
+            # disabled sentinels. All the target/URL routing below operates on
+            # `active`; disabled segments only ever produce a "disabled in
+            # Settings" notification (see the dispatch block). A disabled
+            # segment counts as matched, so chain_ok stays True -- it just
+            # doesn't fire. A normal entry is (cmd, args, target); a disabled
+            # entry is ("disabled", cmd), so `m[0] != "disabled"` separates
+            # them (a dict is never equal to that string).
+            active = [m for m in matches if m[0] != "disabled"]
+            disabled = [m[1] for m in matches if m[0] == "disabled"]
+
             # Trailing-target propagation. When only the LAST segment carries
             # an explicit "on {alias}" and every earlier segment is untargeted,
             # distribute the trailing target backward across all prior
@@ -804,15 +864,16 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
             # happens BEFORE the cross-monitor URL check so the check sees
             # the resolved targets. Applies to all action types, not just
             # open_url -- "launch dolphin and open reddit on monitor one"
-            # naturally means both land on monitor one.
-            if chain_ok and len(matches) >= 2:
-                last_target = matches[-1][2]
-                earlier_targets = [t for _, _, t in matches[:-1]]
+            # naturally means both land on monitor one. Disabled segments are
+            # excluded -- they carry no target and never dispatch.
+            if chain_ok and len(active) >= 2:
+                last_target = active[-1][2]
+                earlier_targets = [t for _, _, t in active[:-1]]
                 if last_target is not None and all(t is None for t in earlier_targets):
-                    matches = [
-                        (cmd, args, last_target) for cmd, args, _ in matches[:-1]
-                    ] + [matches[-1]]
-                    print(f"[commands] Trailing target '{last_target}' propagated to {len(matches) - 1} prior segment(s)")
+                    active = [
+                        (cmd, args, last_target) for cmd, args, _ in active[:-1]
+                    ] + [active[-1]]
+                    print(f"[commands] Trailing target '{last_target}' propagated to {len(active) - 1} prior segment(s)")
                     LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Trailing target propagated: all segments -> {last_target}")
 
             # Two-or-more open_url commands targeting DIFFERENT monitors race in
@@ -823,8 +884,8 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
             # place. A distinct-targets check (set length > 1) catches all the
             # ambiguous cases including "on mon1 and (no target)" since None
             # and "DP-2" are distinct values.
-            if chain_ok and matches:
-                url_targets = [target for cmd, _, target in matches if cmd["action"] == "open_url"]
+            if chain_ok and active:
+                url_targets = [target for cmd, _, target in active if cmd["action"] == "open_url"]
                 if len(url_targets) >= 2 and len(set(url_targets)) > 1:
                     print("[commands] Chain aborted: multiple open_url commands targeting different monitors")
                     LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: multiple URLs targeting different monitors")
@@ -838,26 +899,33 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                 return False
 
             if chain_ok and matches:
-                print(f"[commands] Chained {len(matches)} commands")
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Chaining {len(matches)} commands")
+                # Disabled segments matched but are disabled in Settings:
+                # notify once each, never dispatch. They rode through chain
+                # validation (so they don't fail the chain) but stop here.
+                for cmd in disabled:
+                    _notify_disabled(cmd, gui_env)
 
-                # Build a queue of "output:wm_class" entries so the KWin
-                # placer can match each arriving window to the correct
-                # entry by class -- not by head-of-queue order, which races
-                # with how fast each app maps its window (see _wm_class_hint).
-                entries = [
-                    f"{target}:{_wm_class_hint(cmd)}"
-                    for cmd, _, target in matches if target
-                ]
-                if entries:
-                    queue_str = ",".join(entries)
-                    windows.write_next_screen(queue_str, gui_env)
+                if active:
+                    print(f"[commands] Chained {len(active)} commands")
+                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Chaining {len(active)} commands")
 
-                for cmd, args, target in matches:
-                    if target:
-                        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target}")
-                    print(f"[commands] Best match: '{cmd['name']}'")
-                    _dispatch(cmd, args, gui_env, context)
+                    # Build a queue of "output:wm_class" entries so the KWin
+                    # placer can match each arriving window to the correct
+                    # entry by class -- not by head-of-queue order, which races
+                    # with how fast each app maps its window (see _wm_class_hint).
+                    entries = [
+                        f"{target}:{_wm_class_hint(cmd)}"
+                        for cmd, _, target in active if target
+                    ]
+                    if entries:
+                        queue_str = ",".join(entries)
+                        windows.write_next_screen(queue_str, gui_env)
+
+                    for cmd, args, target in active:
+                        if target:
+                            LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target}")
+                        print(f"[commands] Best match: '{cmd['name']}'")
+                        _dispatch(cmd, args, gui_env, context)
 
                 return True
             # else: fall through to single-match below
@@ -866,6 +934,12 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
     result = _score_segment(heard)
     if result is None:
         return False
+
+    # Best match is disabled in Settings: notify and stop. Returning True (we
+    # handled it) prevents any further fall-through.
+    if result[0] == "disabled":
+        _notify_disabled(result[1], gui_env)
+        return True
 
     score, best_cmd, best_args, target_output = result
     print(f"[commands] Best match: '{best_cmd['name']}' (score {score:.2f})")

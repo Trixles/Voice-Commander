@@ -20,7 +20,15 @@ companion — keep them in sync.
 - **What:** Pinned `move_to_monitor` uses `fuzzy: false` and slot
   `{alias}`. Name must match in phrase and `"slots"`. UI calls them
   aliases everywhere; canonical def in `core/aliases.py`.
-- **Don't:** Rename it back.
+- **Three-way mismatch (deliberate):** the slug (`move_to_monitor`), the
+  action key (`move_window_to_monitor`), and the 0.6.0 display label
+  ("Move window to monitor") intentionally differ. The slug is grandfathered
+  into users' `commands.json`; renaming it would break saved configs. The
+  action key is the function name in `core.actions.windows`. The label was
+  renamed in 0.6.0 for user-facing consistency with the action key. Canonical
+  explanation lives in a code comment above the `_PINNED_SLOT` entry in
+  `core/aliases.py`; unifying them requires a `load_config` migration first.
+- **Don't:** Rename the slug back, or "fix" the mismatch without a migration.
 
 ### Slot-pinned commands and default aliases live in `core/aliases.py`
 - **What:** `PINNED_SLOT`, `PINNED_SLOT_NAMES`, `NUMBER_WORDS`, and
@@ -35,8 +43,17 @@ companion — keep them in sync.
   are always appended by `CommandsContainer.collect()` on save and
   by `_reset_commands()` on Restore Defaults. `_score_segment` loops
   over `_commands` from the JSON — if not in the file, they don't
-  match.
-- **Don't:** Make `to_dict()` return None for pinned rows.
+  match. `CommandRow.to_dict()` returns None for these rows (their
+  canonical definition lives in `_PINNED_SLOT`, not the row), so
+  `collect()` is the single place that serializes them. As of 0.6.0
+  their `enabled` flag is read off the row in `collect()` via direct
+  attribute access (`row._enable_toggle.isChecked()`) and merged onto
+  the injected `_PINNED_SLOT` dict — `to_dict()` still returns None
+  (Option B; a partial `to_dict` was the alternative, rejected to keep
+  `to_dict`'s None contract intact).
+- **Don't:** Make `collect()` skip the `_PINNED_SLOT` injection. Route
+  slot-pinned `enabled` through `to_dict()` — it returns None by design;
+  `collect()` owns slot-pinned serialization.
 
 ### Trailing slots use greedy regex; mid-phrase slots use lazy
 - **What:** `_phrase_to_regex()` uses `.+` for trailing slots,
@@ -97,12 +114,47 @@ companion — keep them in sync.
 - **Don't:** Lower `TAIL_THRESHOLD` below ~0.55 — the gap to
   semantically-unrelated tails closes fast there.
 
-### Settings UI has three command-row tiers
-- **What:** User actions (editable), system actions (locked
-  name/dropdown, phrases editable), slot-pinned (fully read-only,
-  always last). Full spec in `core/settings/dialog.py` module docstring.
-- **Don't:** Add system actions to dropdown. Make system names
-  editable. Add delete to system rows.
+### Settings UI has two command-row tiers
+- **What:** User actions (editable name/dropdown, deletable, alphabetized)
+  and system commands (locked name/dropdown, editable phrases for most,
+  read-only phrases for slot-pinned, an enable/disable toggle on all). The
+  Commands tab presents these as two sections — "User Commands" and "System
+  Commands" — each with its own header, divided by a separator line. System
+  commands display in a hardcoded order from `_SYSTEM_COMMAND_ORDER` in
+  `core/settings/helpers.py`. Slot-pinned rows are a sub-flavor of system:
+  same header layout (locked name, Options button, toggle), same
+  collapse-by-default behavior; the only difference is their body shows a
+  read-only phrase with a "cannot be edited" note. The bottom-most system
+  row has no separator line beneath it. Pre-0.6.0 this was three separate
+  tiers. Full spec in `core/settings/dialog.py` module docstring.
+- **Don't:** Add system actions to the dropdown. Make system names editable.
+  Add delete to system rows (they get a toggle instead). Re-separate
+  slot-pinned as its own tier — the structural distinction it once had (no
+  Options button, permanently expanded, always at the bottom) was removed in
+  0.6.0.
+
+### Disabled commands are matched but not dispatched
+- **What:** System and slot-pinned commands carry an `enabled` field in
+  `commands.json` (`true`/`false`; absent = `true` for back-compat with
+  pre-0.6.0 configs). `_score_segment` still SCORES disabled commands but,
+  when the best match is disabled, returns a `("disabled", cmd)` sentinel
+  (a 2-tuple; a normal match's first element is a float score, so callers
+  disambiguate with `result[0] == "disabled"`). The dispatcher (`try_match`,
+  both single-match and chain paths) sees the sentinel and fires a
+  `"<Display> is disabled in Settings"` notification via `_notify_disabled`
+  without calling the action. In a chain, disabled segments notify but do
+  NOT abort the chain — other valid segments still dispatch. User-action
+  commands (launch_app, open_url, open_file, run_command) do not carry
+  `enabled`; their removal mechanism is the delete button.
+- **Why:** Disabling needs to be a first-class user action with feedback.
+  Filtering disabled commands out at load time was the simpler alternative
+  but produced confusing chain behavior — a disabled segment would silently
+  fail the chain match, fall through to single-match, and misfire or do
+  nothing with no explanation.
+- **Don't:** Filter disabled commands at load time. Add `enabled` to
+  user-action rows. Abort a chain on a disabled segment. Check the `enabled`
+  flag before scoring (best-match-then-check-enabled is deliberate, so an
+  enabled lower-scorer can't shadow a disabled higher-scorer).
 
 ### Centering inside a settings row uses a structural anchor, not a computed offset
 - **What:** When a row needs a centered element, split the row at the
@@ -120,6 +172,30 @@ companion — keep them in sync.
 - **What:** `_USER_ACTIONS` includes `run_command`; no default
   example ships. Users need custom shell commands with custom names.
 - **Don't:** Move it back to system actions.
+
+### Entry point enforces single-instance via a per-UID QLocalServer lock
+- **What:** `voice_commander.py` `main()` creates the `QApplication`, then
+  calls `_acquire_single_instance()` **before** loading config or the Vosk
+  model. The lock is a Qt `QLocalServer` (Unix domain socket) named
+  `voice-commander-{os.getuid()}`. A would-be second instance probes with a
+  `QLocalSocket`; if the probe connects, an instance is already running, so
+  the new process prints "Already running" and `sys.exit(0)`. If nobody
+  answers, `removeServer()` clears any stale socket left by a crash, then
+  `listen()` claims the name. The returned server is held in a local
+  (`singleton`) for the process lifetime — dropping that ref frees the lock.
+- **Why a per-UID name:** the `systemd --user` service and any terminal
+  launch share a UID, so the name collides between them *by design*. That
+  collision is exactly what stops a terminal start from spinning up a second
+  listener + duplicate tray icon alongside the running service.
+- **Why fail-open:** if `listen()` fails for an unexpected reason, the guard
+  logs a warning and starts anyway. It's a footgun-killer, not a security
+  control — never block a legitimate launch.
+- **Why before the model load:** the probe needs a live `QApplication` for
+  the event dispatcher, but running it first means a redundant launch exits
+  in milliseconds instead of after a multi-second Vosk model load.
+- **Don't:** Move the guard after the model load. Use a fixed (non-UID)
+  socket name. Drop the `singleton` reference. Make a failed `listen()`
+  abort startup.
 
 ### Install architecture: code lives in `~/.local/share/voice-commander/app/`
 - **What:** `install.sh` copies repo source to the XDG data dir; the

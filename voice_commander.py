@@ -30,6 +30,7 @@ if __name__ == "__main__" and len(sys.argv) == 2 and sys.argv[1] in ("--version"
 
 import vosk
 from PySide6.QtWidgets import QApplication
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 import core.commands as commands
 from core.context import Context, State
@@ -46,6 +47,62 @@ def _get_default_source() -> str:
     from core.run import run_capture
     result = run_capture(["pactl", "get-default-source"])
     return result.stdout.strip()
+
+
+# -- Single-instance guard ---------------------------------------------------
+
+# Per-user socket name. The systemd --user service and any terminal launch
+# share a UID, so this name collides between them by design -- that collision
+# is exactly what stops a second listener + duplicate tray icon from starting.
+_SINGLE_INSTANCE_NAME = f"voice-commander-{os.getuid()}"
+
+
+def _drain_pending(server: QLocalServer) -> None:
+    """Close probe connections from would-be second instances.
+
+    They only need to know *someone* answered; we don't read from them. Drain
+    them so they don't pile up as pending sockets for the process lifetime.
+    """
+    while server.hasPendingConnections():
+        conn = server.nextPendingConnection()
+        conn.disconnectFromServer()
+        conn.deleteLater()
+
+
+def _acquire_single_instance() -> QLocalServer | None:
+    """Claim the single-instance lock, or report that another instance holds it.
+
+    Uses a Unix domain socket as the lock (Qt's QLocalServer). If a prior
+    instance is alive it answers the probe connection -> we return None. If it
+    crashed it left a stale socket file, which removeServer() clears before we
+    listen. Requires a live QApplication for the event dispatcher.
+
+    Returns the listening QLocalServer (caller MUST keep a reference alive for
+    the process lifetime) when we are the first instance, or None when another
+    instance already holds the lock.
+    """
+    probe = QLocalSocket()
+    probe.connectToServer(_SINGLE_INSTANCE_NAME)
+    if probe.waitForConnected(500):
+        # Someone is listening -> an instance is already running.
+        probe.disconnectFromServer()
+        return None
+
+    # No live holder answered. Clear any stale socket left behind by a crashed
+    # instance, then claim the name ourselves.
+    QLocalServer.removeServer(_SINGLE_INSTANCE_NAME)
+    server = QLocalServer()
+    if not server.listen(_SINGLE_INSTANCE_NAME):
+        # Couldn't listen for some unexpected reason. Fail OPEN: the guard is a
+        # footgun-killer, not a security control, so don't block a real launch.
+        print(
+            f"[voice-commander] WARNING: single-instance lock unavailable: "
+            f"{server.errorString()}",
+            file=sys.stderr,
+        )
+        return server
+    server.newConnection.connect(lambda: _drain_pending(server))
+    return server
 
 
 # -- Main --------------------------------------------------------------------
@@ -95,6 +152,22 @@ def _listener_thread(
 def main() -> None:
     print("[voice-commander] Starting up.")
 
+    # Qt app must exist before the single-instance probe (QLocalSocket needs
+    # the event dispatcher). Run the guard FIRST -- before the costly config
+    # and Vosk model loads -- so a redundant launch (e.g. a terminal start
+    # alongside the systemd service) exits fast instead of spinning up a second
+    # listener + duplicate tray icon.
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # don't quit when no windows are open
+
+    singleton = _acquire_single_instance()  # keep ref alive: holds the lock
+    if singleton is None:
+        print(
+            "[voice-commander] Already running (another instance holds the "
+            "lock); exiting."
+        )
+        sys.exit(0)
+
     commands.load_config()
     refresh_monitor_map(GUI_ENV)
     commands.seed_monitor_defaults()
@@ -133,9 +206,7 @@ def main() -> None:
     )
     t.start()
 
-    # Qt main thread
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(False)  # don't quit when no windows are open
+    # Qt main thread (app + single-instance lock were set up at the top).
     tray = VoiceCommanderTray(state_queue, command_queue)
     sys.exit(app.exec())
 

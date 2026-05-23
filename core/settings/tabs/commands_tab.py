@@ -28,11 +28,11 @@ import re
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QSize, QSortFilterProxyModel, Signal
-from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtGui import QColor, QPainter, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout,
-    QLabel, QLineEdit, QListView, QPlainTextEdit, QPushButton, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QAbstractButton, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
+    QHBoxLayout, QLabel, QLineEdit, QListView, QPlainTextEdit, QPushButton,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from core.aliases import PINNED_SLOT as _PINNED_SLOT
@@ -47,6 +47,72 @@ from core.settings.helpers import (
 
 if TYPE_CHECKING:
     from core.settings.dialog import SettingsDialog
+
+
+# -- Toggle switch widget -----------------------------------------------------
+
+class ToggleSwitch(QAbstractButton):
+    """A custom-painted on/off pill toggle: grey (off) / green (on).
+
+    Lives on system and slot-pinned command rows to flip the command's
+    ``enabled`` flag. Subclasses QAbstractButton so it is checkable and gets
+    the ``toggled(bool)`` signal for free -- CommandRow connects that to its
+    dirty path. We do NOT override mousePressEvent: QAbstractButton already
+    toggles a checkable button and emits ``toggled`` on click, and overriding
+    would risk a double-toggle. A styled checkable QPushButton can't give the
+    pill+thumb look, hence the manual paint.
+
+    Colours are the Catppuccin Mocha values used in style.py. The disabled
+    (greyed) palette is future-proofing -- 0.6.0 never disables the widget
+    itself; only the underlying command's ``enabled`` flag toggles.
+    """
+
+    _OFF_TRACK = QColor("#45475a")   # style.py border/surface grey
+    _OFF_THUMB = QColor("#a6adc8")   # style.py muted text
+    _ON_TRACK  = QColor("#46a34a")   # deeper green so the light thumb stands out
+    _ON_THUMB  = QColor("#cdd6f4")   # style.py default text
+    _DIS_TRACK = QColor("#313244")
+    _DIS_THUMB = QColor("#585b70")
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+
+    def sizeHint(self) -> QSize:
+        return QSize(44, 24)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        # Track: a pill inset 1px so the antialiased edge isn't clipped.
+        track = self.rect().adjusted(1, 1, -1, -1)
+        radius = track.height() / 2
+
+        if not self.isEnabled():
+            track_color, thumb_color = self._DIS_TRACK, self._DIS_THUMB
+        elif self.isChecked():
+            track_color, thumb_color = self._ON_TRACK, self._ON_THUMB
+        else:
+            track_color, thumb_color = self._OFF_TRACK, self._OFF_THUMB
+
+        painter.setBrush(track_color)
+        painter.drawRoundedRect(track, radius, radius)
+
+        # Thumb: a circle inset ~3px from the track edges, sliding left (off)
+        # to right (on).
+        inset = 3
+        diameter = track.height() - inset * 2
+        y = track.top() + inset
+        if self.isChecked():
+            x = track.right() - inset - diameter
+        else:
+            x = track.left() + inset
+        painter.setBrush(thumb_color)
+        painter.drawEllipse(int(x), int(y), int(diameter), int(diameter))
 
 
 # -- App picker popup ---------------------------------------------------------
@@ -191,8 +257,14 @@ class CommandRow(QWidget):
 
     def _wire_dirty_signals(self) -> None:
         """Connect every editable widget's change signal to _emit_dirty.
-        Called after _populate so initial setText/setPlainText calls don't fire.
-        Slot-pinned rows have no editable widgets, so this is a no-op for them."""
+        Called after _populate so initial setText/setPlainText calls don't fire
+        (and after _build_ui's setChecked on the toggle, so that doesn't fire
+        either)."""
+        # The enable/disable toggle exists on system + slot-pinned rows. Connect
+        # it before the slot-pinned early-out: a slot-pinned row's ONLY editable
+        # widget is this toggle, so it still needs the dirty path live.
+        if self._enable_toggle is not None:
+            self._enable_toggle.toggled.connect(self._emit_dirty)
         if self._is_slot_pinned:
             return
         if self._name_edit is not None and not self._name_edit.isReadOnly():
@@ -219,7 +291,9 @@ class CommandRow(QWidget):
         self._name_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         if self._is_slot_pinned:
-            # Slot-pinned: fully static, no dropdown, no Options button.
+            # Slot-pinned: static name + action label like a system row. As of
+            # 0.6.0 they also get an Options button (phrases are read-only in
+            # the body, but the row collapses/expands like the rest).
             self._name_edit.setReadOnly(True)
             self._action_combo = None
             action_key = self._cmd.get("action", "")
@@ -229,9 +303,12 @@ class CommandRow(QWidget):
                 "background-color: #282839; color: #6c7086; font-size: 9pt;"
                 "border: 1px solid #45475a; border-radius: 4px; padding: 3px 6px;"
             )
-            self._expand_btn = None
+            self._expand_btn = QPushButton("Options")
+            self._expand_btn.setFixedWidth(82)
+            self._expand_btn.clicked.connect(self._toggle_expand)
             h.addWidget(self._name_edit)
             h.addWidget(action_lbl)
+            h.addWidget(self._expand_btn)
         elif self._is_system_action:
             # System action: static label (matches slot-pinned style), no dropdown.
             # Phrases are still editable via Options, but name and action are locked.
@@ -266,14 +343,25 @@ class CommandRow(QWidget):
             h.addWidget(self._action_combo)
             h.addWidget(self._expand_btn)
 
-        self._delete_btn = QPushButton("\u2715")
-        self._delete_btn.setFixedSize(28, 28)
-        self._delete_btn.setObjectName("deleteBtn")
-        self._delete_btn.setToolTip("Delete command")
-        self._delete_btn.clicked.connect(self._on_delete)
+        # Right-edge control. User rows get a delete button; system and
+        # slot-pinned rows get the enable/disable toggle. The delete button is
+        # widened to 44 to match the toggle's width so the right column stays
+        # flush across every row type (height stays 28 -- the 24-tall toggle
+        # centers within it).
         if self._is_slot_pinned or self._is_system_action:
-            self._delete_btn.setVisible(False)
-        h.addWidget(self._delete_btn)
+            self._delete_btn = None
+            self._enable_toggle = ToggleSwitch()
+            self._enable_toggle.setChecked(self._cmd.get("enabled", True))
+            self._enable_toggle.setToolTip("Enable / disable this command")
+            h.addWidget(self._enable_toggle)
+        else:
+            self._enable_toggle = None
+            self._delete_btn = QPushButton("\u2715")
+            self._delete_btn.setFixedSize(44, 28)
+            self._delete_btn.setObjectName("deleteBtn")
+            self._delete_btn.setToolTip("Delete command")
+            self._delete_btn.clicked.connect(self._on_delete)
+            h.addWidget(self._delete_btn)
         outer.addWidget(header)
 
         # -- Body -------------------------------------------------------------
@@ -397,12 +485,14 @@ class CommandRow(QWidget):
         self._file_widget.setVisible(False)
         self._shell_widget.setVisible(False)
 
-        # Slot-pinned rows start permanently expanded.
-        self._body.setVisible(self._is_slot_pinned)
-        if self._is_slot_pinned:
-            self._expanded = True
+        # All rows -- including slot-pinned, as of 0.6.0 -- start collapsed.
+        # (_expanded defaults to False in __init__.)
+        self._body.setVisible(False)
         outer.addWidget(self._body)
-        outer.addWidget(_h_rule())
+        # Per-row separator line. Stored so the container can hide it on the
+        # last system row (the bottom-most row needs no line beneath it).
+        self._bottom_rule = _h_rule()
+        outer.addWidget(self._bottom_rule)
 
     def _populate(self, cmd: dict) -> None:
         self._populating = True
@@ -506,8 +596,6 @@ class CommandRow(QWidget):
         self._confirm_note.setVisible(action_key in _CONFIRM_ACTIONS)
 
     def _toggle_expand(self) -> None:
-        if self._is_slot_pinned:
-            return
         self._expanded = not self._expanded
         if self._expanded:
             self._update_arg_visibility(self._current_action_key())
@@ -620,6 +708,12 @@ class CommandRow(QWidget):
         for key in ("confirm", "cooldown", "threshold", "slots"):
             if key in self._cmd:
                 result[key] = self._cmd[key]
+        # System rows carry their enable/disable state explicitly -- written
+        # even when True (explicit beats absent-means-True in the on-disk
+        # format). Slot-pinned rows returned None above; user-action rows have
+        # no toggle (_enable_toggle is None) and never write `enabled`.
+        if self._enable_toggle is not None:
+            result["enabled"] = self._enable_toggle.isChecked()
         return result
 
 
@@ -638,57 +732,110 @@ class CommandsContainer(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setSpacing(8)
+
+        _BLURB_CSS = "color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;"
+
+        # ---- User Commands section -----------------------------------------
+        layout.addWidget(_section_label("User Commands"))
+        user_blurb = QLabel(
+            "Your own commands. For Launch app, Open URL, Open file, and Run "
+            "shell command you can choose a custom name. Add one with the "
+            "button below; remove one with its ✕."
+        )
+        user_blurb.setWordWrap(True)
+        user_blurb.setStyleSheet(_BLURB_CSS)
+        layout.addWidget(user_blurb)
 
         add_btn = QPushButton("+ Add Command")
         add_btn.setFixedWidth(130)
         add_btn.clicked.connect(self._add_blank_row)
         layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addSpacing(8)
 
-        self._rows_layout = QVBoxLayout()
-        self._rows_layout.setContentsMargins(0, 0, 0, 0)
-        self._rows_layout.setSpacing(0)
-        layout.addLayout(self._rows_layout)
+        self._user_rows_layout = QVBoxLayout()
+        self._user_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._user_rows_layout.setSpacing(0)
+        layout.addLayout(self._user_rows_layout)
+
+        # ---- System Commands section ---------------------------------------
+        # The last user row's own separator line divides the two sections, the
+        # same way the Wake Words / Commands sections are divided by a line.
+        layout.addWidget(_section_label("System Commands"))
+        sys_blurb = QLabel(
+            "Built-in actions (volume, media, window, power). Their names and "
+            "actions are locked, but you can edit each one's phrases and toggle "
+            "it on or off. A disabled command is heard but skipped, with a "
+            "notification."
+        )
+        sys_blurb.setWordWrap(True)
+        sys_blurb.setStyleSheet(_BLURB_CSS)
+        layout.addWidget(sys_blurb)
+
+        self._system_rows_layout = QVBoxLayout()
+        self._system_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._system_rows_layout.setSpacing(0)
+        layout.addLayout(self._system_rows_layout)
         layout.addStretch()
 
-        # Sort existing commands: open A-Z, system A-Z, slot-pinned last.
-        visible_cmds = [c for c in commands if c.get("name") not in _HIDDEN_COMMANDS]
-        slot_cmds    = [c for c in visible_cmds if c.get("name") in _PINNED_SLOT_NAMES]
-        normal_cmds  = [c for c in visible_cmds if c.get("name") not in _PINNED_SLOT_NAMES]
-        normal_cmds.sort(key=_sort_key)
-
-        for cmd in normal_cmds:
-            self._append_row(CommandRow(cmd))
-
-        # Slot-pinned always at very bottom, fixed order.
+        # Build the row set. User + system commands come from commands.json
+        # (minus _HIDDEN_COMMANDS, which removes open_settings AND the two
+        # slot-pinned names). Slot-pinned rows get their canonical definition
+        # from _PINNED_SLOT instead, merged with the user's saved `enabled`
+        # state off disk. Everything is sorted together by _sort_key (user A-Z,
+        # then system + slot-pinned interleaved per _SYSTEM_COMMAND_ORDER) and
+        # routed into the matching section layout.
+        on_disk_by_name = {c.get("name"): c for c in commands}
+        candidates = [c for c in commands if c.get("name") not in _HIDDEN_COMMANDS]
         for pinned in _PINNED_SLOT:
-            self._append_row(CommandRow(pinned))
+            merged = dict(pinned)                       # canonical definition
+            saved = on_disk_by_name.get(pinned["name"], {})
+            merged["enabled"] = saved.get("enabled", True)  # prefer saved state
+            candidates.append(merged)
 
-    def _prepend_row(self, row: CommandRow) -> None:
-        self._rows.insert(0, row)
-        self._rows_layout.insertWidget(0, row)
-        row.dirtied.connect(self.dirtied)
+        candidates.sort(key=_sort_key)
+        system_rows: list[CommandRow] = []
+        for cmd in candidates:
+            row = CommandRow(cmd)
+            self._add_row(row)
+            if self._is_system_row(row):
+                system_rows.append(row)
 
-    def _append_row(self, row: CommandRow) -> None:
+        # The bottom-most system command is the last row in the whole tab, so
+        # it gets no separator line beneath it.
+        if system_rows:
+            system_rows[-1]._bottom_rule.setVisible(False)
+
+    @staticmethod
+    def _is_system_row(row: CommandRow) -> bool:
+        return row._is_slot_pinned or row._is_system_action
+
+    def _add_row(self, row: CommandRow) -> None:
+        """Append an existing (from-config) row to its section's layout."""
         self._rows.append(row)
-        self._rows_layout.addWidget(row)
+        target = (self._system_rows_layout if self._is_system_row(row)
+                  else self._user_rows_layout)
+        target.addWidget(row)
         row.dirtied.connect(self.dirtied)
 
     def _add_blank_row(self) -> None:
         blank = {"name": "", "phrases": [], "action": APP_ACTION_KEY, "args": {}}
-        row = CommandRow(blank)
+        row = CommandRow(blank)              # launch_app -> user row
         row._expanded = True
         row._body.setVisible(True)
         self._new_rows.append(row)
-        self._prepend_row(row)
+        self._rows.append(row)
+        # New user commands go to the top of the User Commands section.
+        self._user_rows_layout.insertWidget(0, row)
+        row.dirtied.connect(self.dirtied)
         # Adding a row is itself a dirty change, even before the user types.
         self.dirtied.emit()
 
     def remove_row(self, row: CommandRow) -> None:
+        # Only user rows have a delete button, so removal always targets the
+        # User Commands section.
         if row in self._rows:
             self._rows.remove(row)
-            self._rows_layout.removeWidget(row)
+            self._user_rows_layout.removeWidget(row)
             row.deleteLater()
             self.dirtied.emit()
         self._new_rows = [r for r in self._new_rows if r is not row]
@@ -696,6 +843,16 @@ class CommandsContainer(QWidget):
     def collect(self) -> list[dict]:
         slugs: set[str] = set()
         result = []
+        # Option B for slot-pinned `enabled` serialization: slot-pinned
+        # to_dict() still returns None (the canonical row data lives in
+        # _PINNED_SLOT, not in the row), so the user's toggle state is read
+        # here via direct attribute access on the row. collect() is the single
+        # place that knows how slot-pinned rows serialize. Map name -> row so
+        # the _PINNED_SLOT injection below can pick up each toggle's state.
+        pinned_rows = {
+            row._cmd.get("name"): row
+            for row in self._rows if row._is_slot_pinned
+        }
         for row in self._rows:
             # NOTE: do NOT filter on row.isVisible() here. Qt reports widgets on
             # inactive tabs as not-visible, so checking isVisible() would drop
@@ -710,8 +867,13 @@ class CommandsContainer(QWidget):
             if d:
                 result.append(d)
         # Pinned slot commands are always written to ensure they exist on disk.
+        # Carry through each row's enable/disable toggle state.
         for pinned in _PINNED_SLOT:
-            result.append(dict(pinned))
+            entry = dict(pinned)
+            row = pinned_rows.get(pinned["name"])
+            if row is not None and row._enable_toggle is not None:
+                entry["enabled"] = row._enable_toggle.isChecked()
+            result.append(entry)
         return result
 
 
@@ -752,17 +914,10 @@ def build(dialog: "SettingsDialog") -> QWidget:
     wr.addWidget(dialog._wake_edit)
     cl.addWidget(wake_row)
 
+    # Separator between Wake Words and the command sections. The User Commands
+    # and System Commands section headers (and the line dividing them) live
+    # inside CommandsContainer.
     cl.addWidget(_h_rule())
-    cl.addWidget(_section_label("Commands"))
-    commands_blurb = QLabel(
-        "Add commands using the Add Command button. For Launch app, Open URL, "
-        "Open file, and Run shell command, you can choose a custom name. "
-        "System action commands (volume, media, window, power) appear below "
-        "with locked names and actions; their phrases can still be edited."
-    )
-    commands_blurb.setWordWrap(True)
-    commands_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
-    cl.addWidget(commands_blurb)
 
     cmd_frame = QFrame()
     cmd_frame.setObjectName("cmdFrame")

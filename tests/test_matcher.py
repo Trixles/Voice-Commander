@@ -12,6 +12,7 @@ This is Tier 3 of the refactor plan in REVIEW.md. Two purposes:
 Run from the repo root:  pytest -q
 """
 
+import json
 import os
 import sys
 
@@ -23,7 +24,13 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from core import commands  # noqa: E402
-from core.commands import _extract_slots, _match_non_slot, try_match  # noqa: E402
+from core.commands import (  # noqa: E402
+    _extract_slots,
+    _match_chain_segments,
+    _match_non_slot,
+    _score_segment,
+    try_match,
+)
 from core.overrides import apply_overrides  # noqa: E402
 
 
@@ -233,3 +240,223 @@ def test_overrides_malformed_rows_skipped_silently():
         {"pattern": "bar", "replacement": "baz"},
     ]
     assert apply_overrides("foo", overrides) == "baz"
+
+
+# -- enable/disable: matched-but-skipped semantics (0.6.0) --------------------
+#
+# A command with "enabled": False is still SCORED by the matcher (so the best
+# match can be identified) but is not dispatched. _score_segment returns a
+# ("disabled", cmd) sentinel; try_match notifies and skips. Absent "enabled"
+# key means enabled (back-compat with pre-0.6.0 configs).
+
+
+@pytest.fixture
+def dispatch_capture(monkeypatch):
+    """Mock the side-effecting tail of try_match so the disabled-path tests
+    can assert on what dispatched and what got notified. Each test sets
+    commands._commands itself. Mirrors `matcher_env` above but also captures
+    _notify (the disabled path's only output) and lets the test own the
+    command set."""
+    monkeypatch.setattr(commands, "_config", {"monitors": {"DP-1": ["primary"]}})
+    monkeypatch.setattr(commands, "_last_fired", {})
+    monkeypatch.setattr(commands, "_check_reload", lambda gui_env=None: None)
+
+    dispatched: list = []
+    queued: list = []
+    notified: list = []
+
+    monkeypatch.setattr(
+        commands, "_dispatch",
+        lambda cmd, args, gui_env, context: dispatched.append((cmd["name"], args)),
+    )
+    monkeypatch.setattr(
+        commands, "_dispatch_with_monitor",
+        lambda cmd, args, target, gui_env, context: dispatched.append(
+            (cmd["name"], args, target)
+        ),
+    )
+    monkeypatch.setattr(
+        commands, "_notify",
+        lambda summary, *a, **k: notified.append(summary),
+    )
+    monkeypatch.setattr(
+        commands.windows, "write_next_screen",
+        lambda entry, gui_env: queued.append(entry),
+    )
+    return dispatched, queued, notified
+
+
+def test_score_segment_returns_disabled_sentinel_when_command_disabled(monkeypatch):
+    """A single disabled command, heard string matches its phrase -> the
+    ("disabled", cmd) sentinel, not a normal (score, cmd, args, target)."""
+    monkeypatch.setattr(commands, "_config", {"monitors": {}})
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "volume_down", "display_name": "Volume down",
+         "phrases": ["volume down"], "action": "volume_down",
+         "args": {}, "enabled": False, "cooldown": 0},
+    ])
+    result = _score_segment("volume down")
+    assert result is not None
+    assert result[0] == "disabled"
+    assert result[1]["name"] == "volume_down"
+
+
+def test_score_segment_enabled_match_wins_when_it_outscores_disabled(monkeypatch):
+    """Best-on-score-then-check-enabled: the enabled command scores 1.0
+    (exact), the disabled one ~0.89 (one-char tail garble). Enabled wins
+    and a normal match tuple comes back."""
+    monkeypatch.setattr(commands, "_config", {"monitors": {}})
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "open_plex_enabled", "phrases": ["open plex"],
+         "action": "launch_app", "args": {"app": "plex"}, "cooldown": 0},
+        {"name": "open_plix_disabled", "phrases": ["open plix"],
+         "action": "launch_app", "args": {"app": "plix"},
+         "enabled": False, "cooldown": 0},
+    ])
+    result = _score_segment("open plex")
+    assert result[0] != "disabled"
+    _score, cmd, _args, _target = result
+    assert cmd["name"] == "open_plex_enabled"
+
+
+def test_score_segment_disabled_sentinel_when_disabled_outscores_enabled(monkeypatch):
+    """Same setup, flipped: the DISABLED command is the exact (1.0) match and
+    the enabled one is the garble (~0.89). Because scoring ignores enabled,
+    the disabled command is the best match -> sentinel. This is the case the
+    'best wins, then check enabled' ordering exists for: an enabled lower
+    scorer must NOT shadow the disabled higher scorer."""
+    monkeypatch.setattr(commands, "_config", {"monitors": {}})
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "open_plix_enabled", "phrases": ["open plix"],
+         "action": "launch_app", "args": {"app": "plix"}, "cooldown": 0},
+        {"name": "open_plex_disabled", "phrases": ["open plex"],
+         "action": "launch_app", "args": {"app": "plex"},
+         "enabled": False, "cooldown": 0},
+    ])
+    result = _score_segment("open plex")
+    assert result[0] == "disabled"
+    assert result[1]["name"] == "open_plex_disabled"
+
+
+def test_chain_with_one_disabled_segment_others_fire(monkeypatch):
+    """_match_chain_segments on ["open reddit", "volume down"] where
+    volume_down is disabled: chain_ok stays True, the disabled segment rides
+    along as a sentinel, the enabled one is a normal entry."""
+    monkeypatch.setattr(commands, "_config", {"monitors": {}})
+    monkeypatch.setattr(commands, "_last_fired", {})
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "open_reddit", "phrases": ["open reddit"],
+         "action": "open_url", "args": {"url": "https://reddit.com"},
+         "cooldown": 0},
+        {"name": "volume_down", "display_name": "Volume down",
+         "phrases": ["volume down"], "action": "volume_down",
+         "args": {}, "enabled": False, "cooldown": 0},
+    ])
+    matches, chain_ok, chain_rejected = _match_chain_segments(
+        ["open reddit", "volume down"]
+    )
+    assert chain_ok is True
+    assert chain_rejected is False
+    assert len(matches) == 2
+    # Entry 0 is (cmd, args, target); entry 1 is ("disabled", cmd).
+    assert matches[0][0]["name"] == "open_reddit"
+    assert matches[1][0] == "disabled"
+    assert matches[1][1]["name"] == "volume_down"
+
+
+def test_chain_all_disabled_segments_notify_none_dispatch(dispatch_capture, monkeypatch):
+    """Every segment disabled: chain_ok=True, nothing dispatches, one
+    notification per segment. Asserted via behaviour (try_match), not by
+    poking at the matches list."""
+    dispatched, _queued, notified = dispatch_capture
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "open_reddit", "display_name": "Open reddit",
+         "phrases": ["open reddit"], "action": "open_url",
+         "args": {"url": "https://reddit.com"}, "enabled": False,
+         "cooldown": 0},
+        {"name": "volume_down", "display_name": "Volume down",
+         "phrases": ["volume down"], "action": "volume_down",
+         "args": {}, "enabled": False, "cooldown": 0},
+    ])
+    assert try_match("open reddit and volume down", {}, _Ctx()) is True
+    assert dispatched == []
+    assert len(notified) == 2
+    assert any("Open reddit is disabled in Settings" in n for n in notified)
+    assert any("Volume down is disabled in Settings" in n for n in notified)
+
+
+def test_disabled_does_not_override_confirm_abort(monkeypatch):
+    """A confirm-required segment must abort the chain even when a disabled
+    segment is processed first. The disabled sentinel does NOT short-circuit
+    the loop before the confirm rule is reached -> chain_rejected=True."""
+    monkeypatch.setattr(commands, "_config", {"monitors": {}})
+    monkeypatch.setattr(commands, "_last_fired", {})
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "volume_down", "display_name": "Volume down",
+         "phrases": ["volume down"], "action": "volume_down",
+         "args": {}, "enabled": False, "cooldown": 0},
+        {"name": "shutdown", "phrases": ["shut down"], "action": "shutdown",
+         "args": {}, "confirm": True, "cooldown": 0},
+    ])
+    matches, chain_ok, chain_rejected = _match_chain_segments(
+        ["volume down", "shut down"]
+    )
+    assert chain_rejected is True
+    assert chain_ok is False
+
+
+def test_load_config_synthesizes_enabled_true_for_existing_configs(tmp_path, monkeypatch):
+    """A pre-0.6.0 commands.json has no `enabled` field on its system
+    commands. Loading it must NOT treat them as disabled -- absent key means
+    enabled. We rely on cmd.get("enabled", True) everywhere rather than
+    literally writing the field on load, so this is a behaviour check: the
+    command produces a normal match, not the disabled sentinel."""
+    config_file = tmp_path / "commands.json"
+    config_file.write_text(json.dumps({
+        "commands": [
+            {"name": "volume_down", "display_name": "Volume down",
+             "phrases": ["volume down"], "action": "volume_down",
+             "args": {}, "cooldown": 0},
+        ],
+    }))
+
+    # Anchor the globals load_config() reassigns so they restore at teardown.
+    monkeypatch.setattr(commands, "_commands", commands._commands)
+    monkeypatch.setattr(commands, "_config", commands._config)
+    monkeypatch.setattr(commands, "_last_mtime", commands._last_mtime)
+    monkeypatch.setattr(commands, "CONFIG_PATH", str(config_file))
+
+    commands.load_config()
+
+    result = _score_segment("volume down")
+    assert result is not None
+    assert result[0] != "disabled"
+    _score, cmd, _args, _target = result
+    assert cmd["name"] == "volume_down"
+
+
+def test_slot_pinned_disabled_notifies_no_dispatch(dispatch_capture, monkeypatch):
+    """A disabled slot-pinned command (set_volume): heard 'set volume to
+    fifty' matches the slot phrase, the single-match path returns the
+    disabled sentinel -> notify, no dispatch."""
+    dispatched, _queued, notified = dispatch_capture
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "set_volume", "display_name": "Set volume",
+         "phrases": ["set volume to {level}"], "action": "set_volume",
+         "args": {}, "slots": {"level": {"fuzzy": False}},
+         "enabled": False, "cooldown": 0},
+    ])
+    assert try_match("set volume to fifty", {}, _Ctx()) is True
+    assert dispatched == []
+    assert len(notified) == 1
+    assert "Set volume is disabled in Settings" in notified[0]
+
+
+def test_apply_overrides_runs_regardless_of_enabled():
+    """Overrides are a pre-match text rewrite in core/overrides.py; the
+    function has no command/enabled parameter at all. This locks in the
+    architectural split: a rewrite toward a (potentially disabled) command's
+    phrase still happens -- the matcher decides what to do with the result
+    afterwards. enabled lives entirely downstream of overrides."""
+    overrides = [{"pattern": "vol down", "replacement": "volume down"}]
+    assert apply_overrides("vol down", overrides) == "volume down"

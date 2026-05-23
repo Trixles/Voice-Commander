@@ -116,7 +116,14 @@ STYLESHEET = """
         border: none;
     }
     QWidget#btnBar {
-        border-top: 1px solid #313244;
+        /* Continue the bordered box from the tab pane above (which has L/R/B
+           borders, no top). The pane's bottom border doubles as this bar's
+           top divider, so the button row reads as part of the framed dialog
+           rather than a detached strip. */
+        border-left: 1px solid #45475a;
+        border-right: 1px solid #45475a;
+        border-bottom: 1px solid #45475a;
+        border-top: 1px solid #45475a;
     }
     QFrame#monitorFrame {
         border: 1px solid #45475a;

@@ -27,17 +27,24 @@ Save behavior:
 
 Command name/slug rules:
   - User actions (launch_app, open_url, open_file, run_command): name is
-    user-editable; slug auto-generated from name field on save.
-  - System actions (everything else): name and action dropdown both locked,
-    delete button hidden. Options button is kept so phrases stay editable.
-  - Slot-pinned rows (set_volume, move_to_monitor): fully read-only, always
-    at bottom.
+    user-editable; slug auto-generated from name field on save. Deletable.
+  - System actions (everything else): name and action dropdown both locked;
+    no delete -- instead an enable/disable toggle. Options button kept so
+    phrases stay editable.
+  - Slot-pinned rows (set_volume, move_to_monitor): same locked header as
+    system rows (name, Options, toggle); their phrases are read-only with a
+    "cannot be edited" note in the body. A sub-flavor of system, not a
+    separate tier.
 
-Sorting (applied on open, not on add):
-  1. Newly added rows (unsaved) -- prepended to top, stay there until dialog reopens
-  2. User commands (launch_app, open_url, open_file, run_command) -- A-Z by display name
-  3. System-action commands -- A-Z by display name
-  4. Slot-pinned rows -- always bottom, fixed order
+Layout / sorting (applied on open, not on add):
+  - Two sections: "User Commands" (top) and "System Commands" (below), each
+    with its own header, divided by a separator line.
+  - Newly added user rows -- prepended to the top of the User Commands
+    section, stay there until the dialog reopens.
+  - User commands -- A-Z by display name.
+  - System + slot-pinned commands -- fixed order from _SYSTEM_COMMAND_ORDER in
+    core/settings/helpers.py (NOT alphabetical); slot-pinned interleave per
+    that order. The bottom-most system row has no separator line beneath it.
 
 Action arg UI:
   - launch_app  -> searchable app picker popup (reads /usr/share/applications)

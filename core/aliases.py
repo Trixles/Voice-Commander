@@ -54,6 +54,18 @@ PINNED_SLOT: list[dict] = [
         "args": {},
         "slots": {"level": {"fuzzy": False}},
     },
+    # IMPORTANT: The slug here ("move_to_monitor") differs from the action
+    # key ("move_window_to_monitor") and from the display label
+    # ("Move window to monitor"). This three-way mismatch is DELIBERATE:
+    # - The slug is grandfathered in users' commands.json from pre-0.6.0;
+    #   renaming it would break their saved configs.
+    # - The action key was always "move_window_to_monitor" (longer, more
+    #   accurate) -- it's the function name in core.actions.windows.
+    # - The display label was renamed in 0.6.0 to match the action key for
+    #   user-facing consistency.
+    # If you ever consider unifying these: write a migration in
+    # core.commands.load_config that detects the old slug and rewrites it,
+    # THEN rename. Without migration, this rename is a config-breaker.
     {
         "name": "move_to_monitor",
         "display_name": "Move to Alias",

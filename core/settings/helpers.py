@@ -13,6 +13,7 @@ import configparser
 import json
 import os
 import re
+import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QIcon
@@ -60,6 +61,8 @@ _ACTION_LABELS = {
     "volume_up":               "Volume up",
     "volume_down":             "Volume down",
     "set_volume":              "Set volume",
+    "mute":                    "Mute",
+    "unmute":                  "Unmute",
     "media_pause":             "Pause media",
     "media_resume":            "Resume media",
     "shutdown":                "Shutdown",
@@ -68,7 +71,7 @@ _ACTION_LABELS = {
     "move_window_left":        "Move window left",
     "move_window_right":       "Move window right",
     "close_window":            "Close window",
-    "move_window_to_monitor":  "Move to monitor",
+    "move_window_to_monitor":  "Move window to monitor",  # was "Move to monitor" (renamed 0.6.0)
     "maximize_window":         "Maximize window",
     "open_settings":           "Open settings",
 }
@@ -116,21 +119,64 @@ def _is_user_action(action_key: str) -> bool:
     return action_key in _USER_ACTIONS
 
 
+# Display order for system + slot-pinned commands in the Commands tab.
+# Order is intentional and user-facing; do NOT alphabetize.
+# Adding a new system command? Append it here.
+# Commands present in commands.json but absent from this list fall to the
+# bottom in commands.json order; a stderr warning is emitted (once per name).
+_SYSTEM_COMMAND_ORDER = [
+    "close_window",
+    "maximize_window",
+    "move_window_left",
+    "move_window_right",
+    "move_to_monitor",     # slot-pinned
+    "volume_up",
+    "volume_down",
+    "set_volume",          # slot-pinned
+    "mute",
+    "unmute",
+    "media_pause",
+    "media_resume",
+    "logout",
+    "restart",
+    "shutdown",
+]
+
+# Names already warned about (unordered system commands) -- warn once per
+# process so a stale ordering list doesn't spam stderr on every sort.
+_warned_unordered: set[str] = set()
+
+
 def _sort_key(cmd: dict) -> tuple:
     """
-    Sort key for command rows on load.
-    Returns (group, name) where group: 0=user, 1=system, 2=slot-pinned.
-    Within each group, A-Z by display name.
+    Sort key for command rows on load. Returns a (group, secondary, tertiary)
+    tuple:
+      - User actions: group 0, alphabetical by display name.
+      - System commands AND slot-pinned: group 1, ordered by position in
+        _SYSTEM_COMMAND_ORDER. Commands missing from that list sort to the
+        bottom of the system block (and trigger a one-time stderr warning).
+
+    Slot-pinned rows are NOT a separate group any more -- they're a system
+    sub-flavor and interleave with system commands per _SYSTEM_COMMAND_ORDER.
     """
     name = cmd.get("name", "")
-    if name in _PINNED_SLOT_NAMES:
-        group = 2
-    elif cmd.get("action", "") in _USER_ACTIONS:
-        group = 0
-    else:
-        group = 1
-    display = cmd.get("display_name") or _display_name_from_slug(name)
-    return (group, display.lower())
+    if cmd.get("action", "") in _USER_ACTIONS:
+        display = cmd.get("display_name") or _display_name_from_slug(name)
+        return (0, 0, display.lower())
+
+    try:
+        idx = _SYSTEM_COMMAND_ORDER.index(name)
+    except ValueError:
+        idx = len(_SYSTEM_COMMAND_ORDER) + 1
+        if name not in _warned_unordered:
+            _warned_unordered.add(name)
+            print(
+                f"[settings] WARNING: system command '{name}' is not in "
+                f"_SYSTEM_COMMAND_ORDER (core/settings/helpers.py); it will "
+                f"sort to the bottom of the system block. Update the list.",
+                file=sys.stderr,
+            )
+    return (1, idx, name.lower())
 
 
 # -- .desktop file scanner ----------------------------------------------------

@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] &mdash; 2026-05-23
+
+### Added
+- Per-command enable/disable toggle. Every system and slot-pinned
+  command row on the Commands tab now carries a toggle switch
+  (grey off / green on). A disabled command is still recognized by
+  the matcher but, instead of running, pops a
+  "&lt;Command&gt; is disabled in Settings" notification and skips
+  dispatch. Disabled state is matched-but-not-dispatched on purpose:
+  scoring ignores the flag, so an enabled lower-scoring command can't
+  silently shadow a disabled higher-scoring one. The state persists
+  in `commands.json` via a new `enabled` field &mdash; absent means
+  enabled, so pre-0.6.0 configs keep working untouched.
+- Single-instance guard. Launching `voice-commander` from a terminal
+  while the systemd user service is already running now prints
+  "Already running" and exits, instead of spawning a duplicate tray
+  icon on top of the service. The lock (a per-UID `QLocalServer`) is
+  acquired before the Vosk model loads, so the duplicate bails
+  instantly.
+
+### Changed
+- Commands tab split into "User Commands" and "System Commands"
+  sections, each with its own header. System commands render in a
+  fixed order, and the bottom-most system row has no separator line
+  beneath it.
+- Slot-pinned commands (e.g. "Move window to monitor") are folded
+  into the System Commands section as expandable, collapse-by-default
+  rows with an Options button and read-only phrase bodies, rather
+  than living in a separate always-at-bottom tier. The command-row
+  layout is now two tiers (user / system) instead of three.
+- In a chained command, a disabled segment notifies and is skipped
+  but does **not** abort the chain &mdash; the remaining valid
+  segments still fire. Confirm/cooldown abort rules still take
+  precedence.
+- Display label "Move to monitor" renamed to "Move window to monitor"
+  for consistency with its action key; Mute/Unmute action labels
+  added. The underlying slug (`move_to_monitor`) and action key
+  (`move_window_to_monitor`) are unchanged.
+- Save/Restore/Exit button bar gained a border to match the framed
+  dialog.
+- Tests: +9 matcher cases covering the disabled single-match, chain,
+  and slot-pinned paths plus pre-0.6.0 back-compat synthesis, and a
+  new headless `tests/test_settings_roundtrip.py` covering the
+  `enabled` save/load round-trip. `pytest -q` = 27 passed.
+
 ## [0.5.0] &mdash; 2026-05-22
 
 ### Added

@@ -52,7 +52,9 @@ _SELECTABLE_ACTIONS = [
 # System Commands list -- see _SYSTEM_COMMAND_ORDER below.
 _HIDDEN_COMMANDS = {"move_to_monitor", "set_volume"}
 
-# Slot-pinned rows: permanently expanded, fully read-only, always at bottom.
+# Slot-pinned rows: a sub-flavor of system rows (locked name, Options button,
+# enable toggle) whose body shows a read-only phrase. They sort by
+# _SYSTEM_COMMAND_ORDER like any system row -- interleaved, not bottom-pinned.
 # Canonical definition lives in core/aliases.py; imported above.
 _PINNED_SLOT_NAMES = {p["name"] for p in _PINNED_SLOT}
 
@@ -68,6 +70,8 @@ _ACTION_LABELS = {
     "unmute":                  "Unmute",
     "media_pause":             "Pause media",
     "media_resume":            "Resume media",
+    "open_mic":                "Open mic",
+    "close_mic":               "Close mic",
     "shutdown":                "Shutdown",
     "restart":                 "Restart",
     "logout":                  "Logout",
@@ -128,6 +132,8 @@ def _is_user_action(action_key: str) -> bool:
 # Commands present in commands.json but absent from this list fall to the
 # bottom in commands.json order; a stderr warning is emitted (once per name).
 _SYSTEM_COMMAND_ORDER = [
+    "open_mic",            # 0.8.0: was its own "Open Mic" tab, now a system row
+    "close_mic",
     "close_window",
     "maximize_window",
     "move_window_left",
@@ -234,8 +240,15 @@ def _load_desktop_apps() -> list[dict]:
 # -- Config IO ----------------------------------------------------------------
 
 def _load_config() -> dict:
+    # normalize_config applies the same forward-migrations the runtime loader
+    # does (e.g. 0.8.0 mic-phrases -> system commands), so the dialog and the
+    # listener agree on the config shape. Local import: commands.py does not
+    # import the settings package, so importing it here is cycle-free, and
+    # keeping it local avoids pulling commands.py in at helpers import time.
+    from core.commands import normalize_config
     with open(CONFIG_PATH, "r") as f:
-        return json.load(f)
+        data = json.load(f)
+    return normalize_config(data)
 
 
 def _write_config(data: dict) -> None:

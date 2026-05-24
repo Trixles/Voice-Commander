@@ -74,7 +74,7 @@ Try a few defaults to verify it's working:
 
 ## What ships out of the box
 
-19 default commands (plus the two slot-phrase forms at the bottom):
+21 default commands out of the box (the last two are slot-phrase forms):
 
 | Command          | Phrases                                | What it does                |
 |------------------|----------------------------------------|-----------------------------|
@@ -89,6 +89,8 @@ Try a few defaults to verify it's working:
 | Move Window L/R  | "move left", "move right"              | Move to next monitor        |
 | Maximize Window  | "maximize window"                      | Maximizes focused window    |
 | Close Window     | "close window"                         | Closes focused window       |
+| Open Mic         | "open mic", "open microphone"          | Enter open-mic mode         |
+| Close Mic        | "close mic", "close microphone"        | Exit open-mic mode          |
 | Open Settings    | "open settings"                        | Opens this dialog           |
 | Shutdown         | "shut down", "shutdown", "power off"   | (confirmation required)     |
 | Restart          | "restart", "reboot"                    | (confirmation required)     |
@@ -101,7 +103,7 @@ own in settings.
 
 ## The settings dialog
 
-Right-click tray &rarr; Settings. Seven tabs:
+Right-click tray &rarr; Settings. Six tabs:
 
 1. **Commands** &mdash; the main UI. Add, edit, delete commands. Each
    one has a display name, an action, one or more trigger phrases,
@@ -113,20 +115,21 @@ Right-click tray &rarr; Settings. Seven tabs:
    TV" instead of "move to HDMI-A-2." Friendly monitor names come
    from EDID where available (parsed via `edid-decode`), with the
    port name as fallback.
-4. **Open Mic** &mdash; the phrases that enter and leave open-mic
-   mode.
-5. **Model** &mdash; path to the Vosk model. Leave the default unless
+4. **Model** &mdash; path to the Vosk model. Leave the default unless
    you've downloaded a different one.
-6. **Log** &mdash; live tail of the listener, colour-coded by
+5. **Log** &mdash; live tail of the listener, colour-coded by
    category. Indispensable for figuring out what Vosk is *actually*
    hearing when a command doesn't fire.
-7. **How to Use** &mdash; quick reference for first-time users.
+6. **About** &mdash; quick reference for first-time users.
+
+The phrases that enter and leave open-mic mode are now the **Open mic**
+and **Close mic** system commands on the Commands tab (left-clicking the
+tray icon toggles it too).
 
 The bottom bar has **Save**, **Restore Defaults**, and **Exit**.
 Save is dirty-tracked &mdash; it stays disabled until you've actually
 changed something. Restore Defaults is per-tab; it resets only the
-active tab and skips tabs that have no defaults (Model, Log, How to
-Use).
+active tab and skips tabs that have no defaults (Model, Log, About).
 
 Most edits hot-reload without a service restart. Two settings need a
 restart to take effect: wake words and the Vosk model path (both are

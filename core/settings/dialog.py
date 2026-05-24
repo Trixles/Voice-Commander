@@ -7,15 +7,14 @@ Tab layout (left to right):
   - Commands    : Wake word field, command accordion rows
   - Overrides   : Vosk mishearing rewrite rules (defaults + user rules)
   - Displays    : monitor alias accordion rows
-  - Open Mic    : open/close mic phrase editors
   - Model       : Vosk model path picker
   - Log         : live listener output with colour-coded categories
-  - How to Use  : explanatory blurb
+  - About       : explanatory blurb
 
 Save / Restore Defaults / Exit buttons pinned outside tabs at the bottom.
 Restore Defaults is per-tab: dispatches to the active tab's reset handler
 via `_tab_reset_map`, disabled with a tooltip on tabs without defaults
-(Model, Log, How to Use).
+(Model, Log, About).
 
 Save behavior:
   - Writes through the symlink to the real file
@@ -74,8 +73,6 @@ from PySide6.QtWidgets import (
 
 from core.commands import (
     get_vosk_model_path, _default_commands,
-    DEFAULT_OPEN_MIC_PHRASES as _DEFAULT_OPEN_MIC_PHRASES,
-    DEFAULT_CLOSE_MIC_PHRASES as _DEFAULT_CLOSE_MIC_PHRASES,
 )
 from core.paths import CONFIG_PATH
 from core.aliases import (
@@ -83,13 +80,12 @@ from core.aliases import (
     default_aliases as _default_aliases,
 )
 from core.actions.windows import get_connected_outputs
-from core.env import GUI_ENV
+from core.env import GUI_ENV, blur_compositing_available
 from core.run import run_capture
-from core.settings.style import STYLESHEET
+from core.settings.style import build_stylesheet
 from core.settings.tabs.commands_tab import build as build_commands_tab
 from core.settings.tabs.overrides_tab import build as build_overrides_tab
 from core.settings.tabs.displays_tab import MonitorRow, build as build_displays_tab
-from core.settings.tabs.open_mic_tab import build as build_open_mic_tab
 from core.settings.tabs.model_tab import build as build_model_tab
 from core.settings.tabs.log_tab import build as build_log_tab, _colorize_log_line
 from core.settings.tabs.about_tab import build as build_about_tab
@@ -115,7 +111,14 @@ class SettingsDialog(QDialog):
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         from PySide6.QtCore import QTimer as _QTimer
         _QTimer.singleShot(0, lambda: self.resize(540, 720))
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        # Only request a translucent window when the desktop will composite a
+        # blur behind it -- otherwise the "frosted glass" becomes plain
+        # see-through and looks broken. Spawned popups (AppPickerDialog) read
+        # this flag too. See core.env.blur_compositing_available.
+        self._translucent = blur_compositing_available()
+        if self._translucent:
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         self._config       = _load_config()
         self._monitors     = get_connected_outputs()
@@ -144,16 +147,15 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._build_commands_tab(), "Commands")
         self._tabs.addTab(self._build_overrides_tab(), "Overrides")
         self._tabs.addTab(self._build_displays_tab(), "Displays")
-        self._tabs.addTab(self._build_open_mic_tab(), "Open Mic")
         self._tabs.addTab(self._build_model_tab(), "Model")
         self._tabs.addTab(self._build_log_tab(), "Log")
-        self._tabs.addTab(self._build_about_tab(), "How to Use")
+        self._tabs.addTab(self._build_about_tab(), "About")
         self._tabs.tabBar().setExpanding(True)
         self._tabs.tabBar().setMinimumWidth(540)
         root.addWidget(self._tabs)
 
         # Map tab title -> per-tab reset handler. Tabs absent from this map
-        # (Model, Log, How to Use) have no per-tab defaults and disable the
+        # (Model, Log, About) have no per-tab defaults and disable the
         # bottom-bar Restore Defaults button when selected. Keyed by tab
         # TITLE rather than index so reordering tabs doesn't silently rewire.
         self._tab_reset_map: dict = {
@@ -163,8 +165,6 @@ class SettingsDialog(QDialog):
                           "Remove all user-added override rules and re-enable every built-in default."),
             "Displays":  (self._reset_displays,
                           "Reset every monitor's aliases to the shipped defaults (Display 1, Display 2, ...)."),
-            "Open Mic":  (self._reset_open_mic,
-                          "Restore the default open mic and close mic phrases."),
         }
 
         btn_bar = QWidget()
@@ -198,8 +198,6 @@ class SettingsDialog(QDialog):
         # been built and seeded with initial values. This means the initial
         # setText / setPlainText calls in the build methods don't fire dirty.
         self._wake_edit.textChanged.connect(self._mark_dirty)
-        self._open_mic_edit.textChanged.connect(self._mark_dirty)
-        self._close_mic_edit.textChanged.connect(self._mark_dirty)
         self._commands_container.dirtied.connect(self._mark_dirty)
         self._overrides_container.dirtied.connect(self._mark_dirty)
         for mrow in self._monitor_rows:
@@ -268,9 +266,6 @@ class SettingsDialog(QDialog):
     def _build_displays_tab(self) -> QWidget:
         return build_displays_tab(self)
 
-    def _build_open_mic_tab(self) -> QWidget:
-        return build_open_mic_tab(self)
-
     def _build_log_tab(self) -> QWidget:
         return build_log_tab(self)
 
@@ -317,7 +312,7 @@ class SettingsDialog(QDialog):
                 break
 
     def _apply_stylesheet(self) -> None:
-        self.setStyleSheet(STYLESHEET)
+        self.setStyleSheet(build_stylesheet(self._translucent))
 
     def _mark_dirty(self, *_args) -> None:
         """Enable the Save button. Called by every dirty source -- wake edit,
@@ -350,9 +345,6 @@ class SettingsDialog(QDialog):
         for row in self._monitor_rows:
             name, aliases = row.collect()
             monitors[name] = aliases
-
-        open_mic_phrases  = [p.strip() for p in self._open_mic_edit.toPlainText().split(",") if p.strip()]
-        close_mic_phrases = [p.strip() for p in self._close_mic_edit.toPlainText().split(",") if p.strip()]
 
         new_config = dict(self._config)
         raw_wake = self._wake_edit.text()
@@ -390,10 +382,6 @@ class SettingsDialog(QDialog):
 
         if monitors:
             new_config["monitors"] = monitors
-        if open_mic_phrases:
-            new_config["open_mic_phrases"] = open_mic_phrases
-        if close_mic_phrases:
-            new_config["close_mic_phrases"] = close_mic_phrases
         if self._selected_model_path:
             new_config["vosk_model"] = self._selected_model_path
 
@@ -572,50 +560,10 @@ class SettingsDialog(QDialog):
         )
         self.accept()
 
-    def _reset_open_mic(self) -> None:
-        """
-        Confirm, then restore the shipping open/close mic phrase lists
-        (see _DEFAULT_OPEN_MIC_PHRASES / _DEFAULT_CLOSE_MIC_PHRASES above).
-        """
-        reply = QMessageBox.question(
-            self,
-            "Restore Default Phrases?",
-            "This will replace your open mic and close mic phrases with the defaults.\n\n"
-            "Wake words, commands, overrides, displays, and model settings will NOT "
-            "be affected.\n\n"
-            "This cannot be undone. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                data = json.load(f)
-            data["open_mic_phrases"]  = list(_DEFAULT_OPEN_MIC_PHRASES)
-            data["close_mic_phrases"] = list(_DEFAULT_CLOSE_MIC_PHRASES)
-            _write_config(data)
-            import core.commands as _cmds
-            _cmds.load_config()
-            print("[settings] Open Mic phrases reset to defaults.")
-        except Exception as e:
-            print(f"[settings] Open Mic reset failed: {e}")
-            QMessageBox.warning(self, "Reset failed", f"Could not reset Open Mic phrases:\n{e}")
-            return
-
-        QMessageBox.information(
-            self,
-            "Defaults restored",
-            "Open Mic phrases have been restored to defaults. The settings window "
-            "will close; reopen it to see the new phrases.",
-        )
-        self.accept()
-
     def _update_reset_button_for_tab(self, idx: int) -> None:
         """
         Keep the bottom-bar 'Restore Defaults' button in sync with the active
-        tab. On tabs that have no defaults to restore (Model, Log, How to Use),
+        tab. On tabs that have no defaults to restore (Model, Log, About),
         the button is disabled with a tooltip explaining why. On reset-capable
         tabs, the tooltip is the per-tab message from `_tab_reset_map`.
         """

@@ -119,24 +119,45 @@ companion — keep them in sync.
 
 ### Settings UI has two command-row tiers
 - **What:** User actions (editable name/dropdown, deletable, alphabetized)
-  and system commands (locked name/dropdown, editable phrases for most,
-  read-only phrases for slot-pinned, an enable/disable toggle on all). The
-  Commands tab presents these as two sections — "User Commands" and "System
-  Commands" — each with its own header, divided by a separator line. System
-  commands display in a hardcoded order from `_SYSTEM_COMMAND_ORDER` in
+  and system commands (locked name, editable phrases for most, read-only
+  phrases for slot-pinned, an enable/disable toggle on all). The Commands tab
+  presents these as two sections — "User Commands" and "System Commands" —
+  each with its own header, divided by a separator line. System commands
+  display in a hardcoded order from `_SYSTEM_COMMAND_ORDER` in
   `core/settings/helpers.py`. Slot-pinned rows are a sub-flavor of system:
-  same header layout (locked name, Options button, toggle), same
-  collapse-by-default behavior; the only difference is their body shows a
-  read-only phrase with a "cannot be edited" note. The bottom-most system
-  row has no separator line beneath it. Pre-0.6.0 this was three separate
-  tiers. Full spec in `core/settings/dialog.py` module docstring. As of 0.7.0
-  the Overrides tab mirrors this two-section User/System layout — see "Default
-  overrides toggle via a disabled-pattern list".
+  same header layout, same collapse-by-default behavior; the only difference
+  is their body shows a read-only phrase with a "cannot be edited" note. The
+  bottom-most system row has no separator line beneath it. Pre-0.6.0 this was
+  three separate tiers. Full spec in `core/settings/dialog.py` module
+  docstring. As of 0.7.0 the Overrides tab mirrors this two-section
+  User/System layout — see "Default overrides toggle via a disabled-pattern
+  list".
+- **Header layout (0.8.0):** the two tiers have different header shapes.
+  User rows are `[name (expanding)] [action dropdown] [Options] [delete]` —
+  controls flush right. Locked rows (system + slot-pinned) are
+  `[name (fixed width)] [Options] [toggle]` *centered* in the row by
+  equal-stretch spacers on both ends. Locked rows have **no action label**:
+  it only ever restated the name ("Close window" / "Close window"). The fixed
+  name width (`_LOCKED_NAME_WIDTH` in `commands_tab.py`) keeps every locked
+  row identical so the Options/toggle column stays vertically flush down the
+  section — see "Centering inside a settings row uses a structural anchor".
+  Each locked row's separator (`_bottom_rule`) is variable-width
+  (`_apply_rule_width`): short and centered under the button cluster when
+  collapsed, full width (matching the phrases body) when Options is expanded.
+  User-row separators stay full width. **The collapsed width MUST be pinned
+  with `setFixedWidth`, not `setMaximumWidth`:** an HLine's sizeHint width is
+  -1, so under a cap-plus-stretch scheme the flanking stretch (1) spacers
+  absorb all the slack and the rule collapses to width 0 — invisible on real
+  Qt (it survived only in some offscreen renders). That was the 0.8.0
+  "invisible separator" bug; a fixed width can't be starved.
 - **Don't:** Add system actions to the dropdown. Make system names editable.
   Add delete to system rows (they get a toggle instead). Re-separate
   slot-pinned as its own tier — the structural distinction it once had (no
   Options button, permanently expanded, always at the bottom) was removed in
-  0.6.0.
+  0.6.0; slot-pinned now sort interleaved per `_SYSTEM_COMMAND_ORDER`, not at
+  the bottom. Re-add the action label to locked rows. Size the collapsed
+  locked-row separator with `setMaximumWidth` (it collapses to 0 — use
+  `setFixedWidth`).
 
 ### Disabled commands are matched but not dispatched
 - **What:** System and slot-pinned commands carry an `enabled` field in
@@ -198,6 +219,9 @@ companion — keep them in sync.
 - **What:** When a row needs a centered element, split the row at the
   same x as an already-centered element in the parent layout via two
   equal-stretch sub-widgets — the boundary between them IS the center.
+  Two current users: the Overrides tab's row arrow, and (0.8.0) the locked
+  command rows, which flank the fixed-width `[name][Options][toggle]` trio
+  with a leading and trailing `addStretch(1)` so the trio centers.
 - **Why:** Calibrating a pixel/font-metric constant to land near the
   midpoint only works at one width and breaks the moment the parent
   resizes, the font changes, or DPI shifts.
@@ -205,6 +229,31 @@ companion — keep them in sync.
   widths, or hardcoded pixel values. If something else in the parent
   layout is centered (e.g. an `Qt.AlignmentFlag.AlignHCenter` button),
   anchor to that.
+
+### Settings window translucency is conditional on detected KWin blur
+- **What (0.8.0):** The window is translucent (so a compositor blur shows
+  through as frosted glass) ONLY when `core.env.blur_compositing_available()`
+  returns True; otherwise it's an opaque solid-dark panel. The dialog computes
+  this once at construction (`self._translucent`), sets
+  `WA_TranslucentBackground` only when true, and applies
+  `core/settings/style.build_stylesheet(translucent)` — which swaps the window
+  background between `transparent` and the Catppuccin base `#1e1e2e`.
+  `AppPickerDialog` gates its own `WA_TranslucentBackground` on the same check.
+- **Detection:** parse `~/.config/kwinrc`'s `[Plugins]` group (the file VC
+  already writes via kwriteconfig6 — no new dependency). True iff stock
+  `blurEnabled` is on — *absent counts as on*, since Plasma ships Blur enabled
+  — OR any other `[Plugins]` key containing "blur" and ending "enabled" is
+  true (catches forks like `better_blur_dxEnabled`). Missing file / read error
+  → False.
+- **Why:** an unconditionally-translucent window on a desktop with no blur is
+  genuinely see-through to the raw desktop — it looks broken. Most users run
+  no blur, so opaque is the safe default; translucency is opt-in by positive
+  detection. Erring toward opaque is deliberate (a default-on stock-blur user
+  who has the key absent still reads as on; the failure we avoid is a no-blur
+  user getting a see-through window).
+- **Don't:** Set `WA_TranslucentBackground` unconditionally. Hardcode the
+  window background as `transparent` in the stylesheet. Assume the stock
+  `blurEnabled` key is the only blur effect (third-party forks exist).
 
 ### `run_command` is a user-action, not a system action
 - **What:** `_USER_ACTIONS` includes `run_command`; no default
@@ -281,24 +330,35 @@ companion — keep them in sync.
   `_default_commands()` used by installer and Restore Defaults.
 - **Don't:** Hardcode defaults in `install.sh`.
 
-### Default mic phrases live in `commands.py`, not the settings UI or `listener.py`
-- **What:** `DEFAULT_OPEN_MIC_PHRASES` / `DEFAULT_CLOSE_MIC_PHRASES`
-  are module-level constants in `core/commands.py`.
-  `_default_commands()` embeds them in `--emit-defaults` output.
-  `core/settings/tabs/open_mic_tab.py` imports them as `_DEFAULT_*`
-  aliases for the Restore Defaults buttons and for synthesizing missing
-  keys on load. `listener.py` reads runtime values via
-  `commands.get_open_mic_phrases()` / `get_close_mic_phrases()` —
-  no hardcoded fallback in the listener.
-- **Why:** Single source of truth. Pre-Tier-1, the settings UI had
-  3-phrase defaults and `listener.py` had a 6-phrase fallback — they
-  drifted, so a user's Restore Defaults produced different behavior
-  than a fresh install.
-- **Don't:** Add a fallback constant in `listener.py`. Move the
-  canonical constants into the `core/settings/` package — that
-  re-couples defaults to Qt and breaks
-  `python -m core.commands --emit-defaults`, which `install.sh` runs
-  without PySide6 available.
+### Mic toggles are `open_mic` / `close_mic` system commands, not a separate tab
+- **What (0.8.0):** Open/close mic phrases live in the command list as the
+  `open_mic` / `close_mic` **system commands** (`_default_commands()`),
+  editable on the Commands tab like any other system command. There is no
+  longer an "Open Mic" tab. `DEFAULT_OPEN_MIC_PHRASES` /
+  `DEFAULT_CLOSE_MIC_PHRASES` remain module-level constants in
+  `core/commands.py` — they seed those commands and are the last-resort
+  fallback. "open mike"/"close mike" are **not** in the defaults: the shipped
+  `mike -> mic` override (`core/overrides.py`) covers them.
+- **Dispatch:** mic toggling is a *listener state transition*, not an action.
+  `_MIC_ACTIONS = {"open_mic","close_mic"}` is excluded from `_score_segment`
+  so the fuzzy matcher never scores or dispatches it; the listener intercepts
+  the phrases by substring (`_is_open_mic_command` / `_is_close_mic_command`),
+  which read `commands.get_open_mic_phrases()` / `get_close_mic_phrases()`.
+- **Phrase resolution (`_mic_phrases`):** command-in-list (only if `enabled`;
+  a disabled mic command returns an empty set, so the voice toggle stops while
+  the tray left-click still works) → legacy top-level `open_mic_phrases` /
+  `close_mic_phrases` key (pre-0.8.0 configs) → shipped defaults.
+- **Migration:** `normalize_config(data)` (idempotent) folds the legacy keys
+  into the command list and drops them. Called by BOTH load paths —
+  `commands.load_config()` and `core/settings/helpers._load_config()` — so the
+  listener and the dialog agree on the shape. Disk is cleaned on next save.
+- **Why:** Single source of truth, and the tab was redundant — phrase editing
+  already exists for every system command.
+- **Don't:** Add a fallback constant in `listener.py`. Move the canonical
+  constants into the `core/settings/` package — that re-couples defaults to Qt
+  and breaks `python -m core.commands --emit-defaults`, which `install.sh`
+  runs without PySide6. Add `open_mic`/`close_mic` to `ACTION_REGISTRY` or let
+  them into `_score_segment` (they are state transitions, not actions).
 
 ### Save button: dirty-tracked, not always-on
 - **What:** Save starts disabled. A `dirtied` Qt Signal on

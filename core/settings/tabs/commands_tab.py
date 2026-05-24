@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.aliases import PINNED_SLOT as _PINNED_SLOT
+from core.env import blur_compositing_available
 from core.settings.helpers import (
     APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY,
     _ACTION_LABELS, _CONFIRM_ACTIONS, _CONFIRM_NOTE, _HIDDEN_COMMANDS,
@@ -47,6 +48,18 @@ from core.settings.helpers import (
 
 if TYPE_CHECKING:
     from core.settings.dialog import SettingsDialog
+
+
+# Fixed name-field width for locked rows (system + slot-pinned). Fixed rather
+# than expanding so every locked row is identical: the centered [name][Options]
+# [toggle] trio is the same width on each, which keeps the Options/toggle column
+# vertically flush down the section. Sized to the longest locked display name
+# ("Move window right") with margin.
+_LOCKED_NAME_WIDTH = 180
+
+# Width of the "Options" expand button. Named so the locked-row separator can
+# size itself to the button cluster (see CommandRow._apply_rule_width).
+_OPTIONS_BTN_WIDTH = 82
 
 
 # -- Scroll-safe combo box ----------------------------------------------------
@@ -80,11 +93,13 @@ class AppPickerDialog(QDialog):
         self.setWindowTitle("Choose Application")
         self.setMinimumSize(360, 480)
         # Match SettingsDialog's translucent setup so KWin's blur composites
-        # through. Without this, the QDialog { background-color: transparent }
-        # stylesheet rule has no effect -- Qt paints the default opaque
-        # widget background and the popup looks like a solid dark rectangle
-        # over whatever's behind it.
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # through -- but ONLY when blur is actually available (same check the
+        # dialog uses). Without blur the dialog ships the opaque stylesheet
+        # build, which this popup inherits as a child window; setting
+        # WA_TranslucentBackground there would just make the popup see-through
+        # to the raw desktop. See core.env.blur_compositing_available.
+        if blur_compositing_available():
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.chosen_exec: str | None = None
 
         self._apps = _load_desktop_apps()
@@ -150,17 +165,25 @@ class CommandRow(QWidget):
     """
     Accordion row for one command entry.
 
-    Header: [Name field] [Action dropdown] [Options btn] [Delete btn]
+    Header (two shapes):
+      - User rows:   [Name field] [Action dropdown] [Options btn] [Delete btn]
+                     -- name field expands, controls flush right.
+      - Locked rows: [Name (fixed)] [Options btn] [Toggle]  -- the trio is
+                     centered in the row by equal-stretch spacers on both ends;
+                     no action label (it only restated the name).
     Body (hidden until expanded):
         Phrases textarea
         Action-specific arg widget
         Confirmation-flow note (for confirm=true actions)
 
     Name field behaviour:
-      - User actions (launch_app, open_url, open_file, run_command): editable.
-      - System actions: read-only static label; row preserves its original
-        slug across saves so 'Restore Defaults' can match by name.
-      - Slot-pinned rows: always read-only, no dropdown.
+      - User actions (launch_app, open_url, open_file, run_command): editable,
+        expanding width.
+      - System actions: read-only, fixed width (_LOCKED_NAME_WIDTH); row
+        preserves its original slug across saves so 'Restore Defaults' can
+        match by name.
+      - Slot-pinned rows: same as system rows (read-only, fixed width, no
+        dropdown); the only difference is their body shows read-only phrases.
 
     Stash/restore:
       - _stash["app"], _stash["url"], _stash["path"], _stash["command"] persist
@@ -242,42 +265,27 @@ class CommandRow(QWidget):
         self._name_edit.setPlaceholderText("Command name")
         self._name_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        if self._is_slot_pinned:
-            # Slot-pinned: static name + action label like a system row. As of
-            # 0.6.0 they also get an Options button (phrases are read-only in
-            # the body, but the row collapses/expands like the rest).
+        if self._is_slot_pinned or self._is_system_action:
+            # Locked row (system action or slot-pinned). Name and action are
+            # fixed, so there's no editable name field and no dropdown. As of
+            # 0.8.0 there's also no action label: it only ever restated the name
+            # ("Close window" / "Close window"). What's left -- the name, the
+            # Options button, and the enable toggle -- is centered in the row via
+            # equal-stretch spacers (see "Centering inside a settings row uses a
+            # structural anchor" in ARCHITECTURE.md): the leading stretch here
+            # and the trailing stretch after the toggle below. The name field is
+            # a fixed width so every locked row is identical and the
+            # Options/toggle column stays vertically flush. Slot-pinned rows show
+            # read-only phrases in the body; system rows allow editing -- that's
+            # the only remaining difference between the two.
             self._name_edit.setReadOnly(True)
+            self._name_edit.setFixedWidth(_LOCKED_NAME_WIDTH)
             self._action_combo = None
-            action_key = self._cmd.get("action", "")
-            action_lbl = QLabel(_ACTION_LABELS.get(action_key, action_key))
-            action_lbl.setFixedWidth(160)
-            action_lbl.setStyleSheet(
-                "background-color: #282839; color: #6c7086; font-size: 9pt;"
-                "border: 1px solid #45475a; border-radius: 4px; padding: 3px 6px;"
-            )
             self._expand_btn = QPushButton("Options")
-            self._expand_btn.setFixedWidth(82)
+            self._expand_btn.setFixedWidth(_OPTIONS_BTN_WIDTH)
             self._expand_btn.clicked.connect(self._toggle_expand)
+            h.addStretch(1)
             h.addWidget(self._name_edit)
-            h.addWidget(action_lbl)
-            h.addWidget(self._expand_btn)
-        elif self._is_system_action:
-            # System action: static label (matches slot-pinned style), no dropdown.
-            # Phrases are still editable via Options, but name and action are locked.
-            self._name_edit.setReadOnly(True)
-            self._action_combo = None
-            action_key = self._cmd.get("action", "")
-            action_lbl = QLabel(_ACTION_LABELS.get(action_key, action_key))
-            action_lbl.setFixedWidth(160)
-            action_lbl.setStyleSheet(
-                "background-color: #282839; color: #6c7086; font-size: 9pt;"
-                "border: 1px solid #45475a; border-radius: 4px; padding: 3px 6px;"
-            )
-            self._expand_btn = QPushButton("Options")
-            self._expand_btn.setFixedWidth(82)
-            self._expand_btn.clicked.connect(self._toggle_expand)
-            h.addWidget(self._name_edit)
-            h.addWidget(action_lbl)
             h.addWidget(self._expand_btn)
         else:
             # User-editable row: dropdown of _SELECTABLE_ACTIONS only.
@@ -290,7 +298,7 @@ class CommandRow(QWidget):
             self._action_combo.currentIndexChanged.connect(self._on_action_changed)
 
             self._expand_btn = QPushButton("Options")
-            self._expand_btn.setFixedWidth(82)
+            self._expand_btn.setFixedWidth(_OPTIONS_BTN_WIDTH)
             self._expand_btn.clicked.connect(self._toggle_expand)
 
             h.addWidget(self._name_edit)
@@ -298,16 +306,19 @@ class CommandRow(QWidget):
             h.addWidget(self._expand_btn)
 
         # Right-edge control. User rows get a delete button; system and
-        # slot-pinned rows get the enable/disable toggle. The delete button is
-        # widened to 44 to match the toggle's width so the right column stays
-        # flush across every row type (height stays 28 -- the 24-tall toggle
-        # centers within it).
+        # slot-pinned rows get the enable/disable toggle. On locked rows the
+        # toggle is the last element of the centered trio, so a trailing stretch
+        # follows it to mirror the leading stretch added above. On user rows the
+        # delete button sits flush at the right edge (the name field expands to
+        # fill); it's 44 wide so it lines up with the toggle width down the page
+        # (height stays 28 -- the 24-tall toggle centers within it).
         if self._is_slot_pinned or self._is_system_action:
             self._delete_btn = None
             self._enable_toggle = ToggleSwitch()
             self._enable_toggle.setChecked(self._cmd.get("enabled", True))
             self._enable_toggle.setToolTip("Enable / disable this command")
             h.addWidget(self._enable_toggle)
+            h.addStretch(1)
         else:
             self._enable_toggle = None
             self._delete_btn = QPushButton("\u2715")
@@ -446,7 +457,26 @@ class CommandRow(QWidget):
         # Per-row separator line. Stored so the container can hide it on the
         # last system row (the bottom-most row needs no line beneath it).
         self._bottom_rule = _h_rule()
-        outer.addWidget(self._bottom_rule)
+        if self._is_slot_pinned or self._is_system_action:
+            # Locked rows: the separator hugs the centered button cluster when
+            # collapsed and widens to the full body when Options is expanded.
+            # Centering is structural (flanking stretches, no pixel math); the
+            # collapsed width is pinned via setFixedWidth in _apply_rule_width
+            # -- NOT setMaximumWidth, which lets the flanking stretches starve
+            # an HLine (sizeHint width -1) down to zero and vanish.
+            self._bottom_rule.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                            QSizePolicy.Policy.Fixed)
+            self._rule_row = QHBoxLayout()
+            self._rule_row.setContentsMargins(0, 0, 0, 0)
+            self._rule_row.setSpacing(0)
+            self._rule_row.addStretch(0)            # 0: left spacer
+            self._rule_row.addWidget(self._bottom_rule)  # 1: the line
+            self._rule_row.addStretch(0)            # 2: right spacer
+            outer.addLayout(self._rule_row)
+            self._apply_rule_width()
+        else:
+            self._rule_row = None
+            outer.addWidget(self._bottom_rule)
 
     def _populate(self, cmd: dict) -> None:
         self._populating = True
@@ -554,6 +584,40 @@ class CommandRow(QWidget):
         if self._expanded:
             self._update_arg_visibility(self._current_action_key())
         self._body.setVisible(self._expanded)
+        self._apply_rule_width()
+
+    def _apply_rule_width(self) -> None:
+        """Locked rows only: size the per-row separator to the centered button
+        cluster when collapsed, and to the full body width when expanded.
+
+        Collapsed width is pinned with setFixedWidth (min == max == trio width),
+        NOT setMaximumWidth. An HLine reports a sizeHint width of -1, so under a
+        cap-plus-stretch scheme the flanking stretch (1) spacers absorb all the
+        slack and the rule collapses to width 0 -- visible in some offscreen
+        renders but invisible on real Qt. A fixed width can't be starved.
+        Centering stays structural: the spacers split the leftover evenly.
+
+        Expanded: the fixed width is released (min 0 / max uncapped) and the
+        rule's slot takes all the stretch, so it spans the full row like the
+        body above it.
+        """
+        if self._rule_row is None:
+            return
+        if self._expanded:
+            self._bottom_rule.setMinimumWidth(0)
+            self._bottom_rule.setMaximumWidth(16777215)  # QWIDGETSIZE_MAX (uncap)
+            self._rule_row.setStretch(0, 0)
+            self._rule_row.setStretch(1, 1)
+            self._rule_row.setStretch(2, 0)
+        else:
+            spacing = 6  # matches the header layout's setSpacing(6)
+            toggle_w = (self._enable_toggle.sizeHint().width()
+                        if self._enable_toggle is not None else 44)
+            trio_w = _LOCKED_NAME_WIDTH + spacing + _OPTIONS_BTN_WIDTH + spacing + toggle_w
+            self._bottom_rule.setFixedWidth(trio_w)
+            self._rule_row.setStretch(0, 1)
+            self._rule_row.setStretch(1, 0)
+            self._rule_row.setStretch(2, 1)
 
     def _pick_app(self) -> None:
         dlg = AppPickerDialog(self)

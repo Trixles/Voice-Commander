@@ -51,12 +51,24 @@ from core.run import run_capture
 
 
 # -- Default mic phrase lists ------------------------------------------------
-# Shipped in commands.json on first install (via --emit-defaults below) and
-# referenced by the Open Mic tab's 'Restore Defaults' button. Also used as
-# the in-process fallback by get_open_mic_phrases() / get_close_mic_phrases()
-# if commands.json is missing these top-level fields entirely.
-DEFAULT_OPEN_MIC_PHRASES  = ["open mic", "open mike", "open microphone"]
-DEFAULT_CLOSE_MIC_PHRASES = ["close mic", "close mike", "close microphone"]
+# As of 0.8.0 the open/close mic phrases live in the command list as the
+# `open_mic` / `close_mic` system commands (see _default_commands), edited on
+# the Commands tab like any other system command. These constants are the
+# default phrases those commands ship with, and the in-process fallback used by
+# get_open_mic_phrases() / get_close_mic_phrases() when neither a command nor a
+# legacy top-level key is present.
+#
+# "open mike" / "close mike" are intentionally absent: the shipped `mike -> mic`
+# default override (core/overrides.py) rewrites them before matching.
+DEFAULT_OPEN_MIC_PHRASES  = ["open mic", "open microphone"]
+DEFAULT_CLOSE_MIC_PHRASES = ["close mic", "close microphone"]
+
+# Mic toggles are listener state transitions, intercepted by substring match
+# (_is_open_mic_command / _is_close_mic_command) BEFORE the fuzzy matcher runs.
+# They are NOT dispatchable ACTION_REGISTRY actions. _score_segment skips any
+# command with one of these action keys so a mic phrase can never be scored
+# into a no-op dispatch or shadow a real fuzzy match.
+_MIC_ACTIONS = {"open_mic", "close_mic"}
 
 
 # -- Action registry ----------------------------------------------------------
@@ -262,6 +274,24 @@ def _default_commands() -> list[dict]:
         "args": {},
     })
     commands.append({
+        # Open Mic mode (listen without a wake word). The phrase is intercepted
+        # by the listener as a state transition, not dispatched as an action
+        # (see _MIC_ACTIONS) -- but it lives here as a system command so its
+        # phrases are editable on the Commands tab like every other one.
+        "name": "open_mic",
+        "display_name": "Open mic",
+        "phrases": list(DEFAULT_OPEN_MIC_PHRASES),
+        "action": "open_mic",
+        "args": {},
+    })
+    commands.append({
+        "name": "close_mic",
+        "display_name": "Close mic",
+        "phrases": list(DEFAULT_CLOSE_MIC_PHRASES),
+        "action": "close_mic",
+        "args": {},
+    })
+    commands.append({
         # Single phrase by design: "open settings" is deliberately NOT a
         # default so it stays free for the user's OS/system-settings command.
         "name": "open_settings",
@@ -297,18 +327,51 @@ def _default_commands() -> list[dict]:
 
     return commands
 
+
+def normalize_config(data: dict) -> dict:
+    """Apply in-place forward-migrations to a freshly loaded config dict.
+
+    Shared by both load paths (this module's load_config and the settings
+    dialog's _load_config) so runtime and UI agree on the migrated shape.
+    Idempotent.
+
+    0.8.0 -- mic phrases moved out of the top-level `open_mic_phrases` /
+    `close_mic_phrases` keys and into the command list as the `open_mic` /
+    `close_mic` system commands. For pre-0.8.0 configs: fold each legacy key
+    into a matching command (creating it from the legacy phrases if absent,
+    else just dropping the now-stale key -- the command is authoritative).
+    """
+    commands = data.get("commands")
+    if not isinstance(commands, list):
+        return data
+    present = {c.get("action") for c in commands if isinstance(c, dict)}
+    for action, legacy_key, display, defaults in (
+        ("open_mic", "open_mic_phrases", "Open mic", DEFAULT_OPEN_MIC_PHRASES),
+        ("close_mic", "close_mic_phrases", "Close mic", DEFAULT_CLOSE_MIC_PHRASES),
+    ):
+        legacy = data.pop(legacy_key, None)
+        if action in present:
+            continue  # already a command; the stale legacy key is now dropped
+        phrases = legacy if (isinstance(legacy, list) and legacy) else list(defaults)
+        commands.append({
+            "name": action,
+            "display_name": display,
+            "phrases": [str(p) for p in phrases],
+            "action": action,
+            "args": {},
+        })
+    return data
+
+
 def load_config() -> None:
     global _commands, _config, _last_mtime
     with open(CONFIG_PATH, "r") as f:
         data = json.load(f)
-    _config = data
-    _commands = data.get("commands", [])
 
     # First launch: populate default commands and write them to disk.
-    if not _commands:
+    if not data.get("commands"):
         print("[commands] Empty command list -- generating defaults.")
-        _commands = _default_commands()
-        data["commands"] = _commands
+        data["commands"] = _default_commands()
         # Seed default wake words on fresh install if not already set.
         if "wake_words" not in data and "wake_word" not in data:
             data["wake_words"] = ["computer", "hey dude"]
@@ -316,6 +379,13 @@ def load_config() -> None:
         with open(real_path, "w") as f:
             json.dump(data, f, indent=2)
         print(f"[commands] Defaults written to {real_path}")
+
+    # Forward-migrations (mic phrases -> system commands, etc.). In-memory only;
+    # the cleaned shape is persisted the next time the user saves from Settings.
+    normalize_config(data)
+
+    _config = data
+    _commands = data.get("commands", [])
 
     _last_mtime = os.path.getmtime(CONFIG_PATH)
     print(f"[commands] Loaded {len(_commands)} command(s) from {CONFIG_PATH}")
@@ -382,18 +452,36 @@ def get_command_window() -> int:
     return _config.get("command_window", 5)
 
 
+def _mic_phrases(action: str, legacy_key: str, defaults: list[str]) -> set[str]:
+    """Resolve the active phrase set for a mic toggle, in priority order:
+
+      1. The `open_mic`/`close_mic` system command in the list -- but ONLY if
+         it's enabled. A disabled mic command returns an empty set, so the
+         voice toggle stops working (tray left-click still toggles via the
+         separate command-queue path).
+      2. The legacy top-level `open_mic_phrases`/`close_mic_phrases` key, for
+         configs written before 0.8.0 that haven't been migrated yet
+         (see _normalize_config).
+      3. The shipped defaults.
+    """
+    for cmd in _commands:
+        if cmd.get("action") == action:
+            if not cmd.get("enabled", True):
+                return set()
+            phrases = cmd.get("phrases") or []
+            return {p.lower().strip() for p in phrases}
+    legacy = _config.get(legacy_key)
+    if isinstance(legacy, list) and legacy:
+        return {p.lower().strip() for p in legacy}
+    return {p.lower().strip() for p in defaults}
+
+
 def get_open_mic_phrases() -> set[str]:
-    phrases = _config.get("open_mic_phrases")
-    if isinstance(phrases, list) and phrases:
-        return {p.lower().strip() for p in phrases}
-    return {p.lower().strip() for p in DEFAULT_OPEN_MIC_PHRASES}
+    return _mic_phrases("open_mic", "open_mic_phrases", DEFAULT_OPEN_MIC_PHRASES)
 
 
 def get_close_mic_phrases() -> set[str]:
-    phrases = _config.get("close_mic_phrases")
-    if isinstance(phrases, list) and phrases:
-        return {p.lower().strip() for p in phrases}
-    return {p.lower().strip() for p in DEFAULT_CLOSE_MIC_PHRASES}
+    return _mic_phrases("close_mic", "close_mic_phrases", DEFAULT_CLOSE_MIC_PHRASES)
 
 
 def get_overrides() -> list[dict]:
@@ -553,6 +641,8 @@ def _score_segment(
     best_args: dict = {}
 
     for cmd in _commands:
+        if cmd.get("action") in _MIC_ACTIONS:
+            continue  # listener-handled state transition; see _MIC_ACTIONS
         threshold = cmd.get("threshold", DEFAULT_THRESHOLD)
         for phrase in cmd["phrases"]:
             if _has_slots(phrase):
@@ -998,11 +1088,11 @@ if __name__ == "__main__":
         config = {
             "command_window": 5,
             "vosk_model": _DEFAULT_VOSK_MODEL_NAME,
+            # open_mic / close_mic ship inside _default_commands() now -- no
+            # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],
             "wake_words": ["computer", "hey dude"],
             "monitors": {},
-            "open_mic_phrases": list(DEFAULT_OPEN_MIC_PHRASES),
-            "close_mic_phrases": list(DEFAULT_CLOSE_MIC_PHRASES),
             "overrides": [],
         }
         json.dump(config, sys.stdout, indent=2)

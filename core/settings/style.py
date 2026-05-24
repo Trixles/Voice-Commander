@@ -6,12 +6,18 @@ by any dialog-spawned popups via `parent.window().styleSheet()`.
 
 Lives in its own module so the dialog code reads end-to-end without
 the embedded CSS wall, and so any other window in the app can apply
-the same palette by importing `STYLESHEET`.
+the same palette by importing `STYLESHEET` / `build_stylesheet`.
+
+Comes in two builds that differ ONLY in the window background:
+`build_stylesheet(translucent=True)` leaves it `transparent` (for desktops
+whose compositor blurs behind the window) and `translucent=False` paints a
+solid Catppuccin-base panel (for desktops with no blur). The dialog picks
+between them at construction via `core.env.blur_compositing_available()`.
 """
 
-STYLESHEET = """
+_STYLESHEET_TEMPLATE = """
     QDialog {
-        background-color: transparent;
+        background-color: __WINDOW_BG__;
         color: #cdd6f4;
     }
     QLabel {
@@ -89,7 +95,7 @@ STYLESHEET = """
         border: 1px solid #45475a;
         border-top: none;
         border-bottom: none;
-        background-color: transparent;
+        background-color: __WINDOW_BG__;
     }
     QTabBar::tab {
         background-color: #181825;
@@ -108,7 +114,7 @@ STYLESHEET = """
         border-right: 1px solid #45475a;
     }
     QTabBar::tab:selected {
-        background-color: transparent;
+        background-color: __WINDOW_BG__;
         color: #cdd6f4;
     }
     QTabBar::tab:hover:!selected {
@@ -116,7 +122,7 @@ STYLESHEET = """
         color: #cdd6f4;
     }
     QScrollArea, QScrollArea > QWidget > QWidget {
-        background-color: transparent;
+        background-color: __WINDOW_BG__;
     }
     QScrollArea {
         border: none;
@@ -186,3 +192,24 @@ STYLESHEET = """
         background-color: #383850;
     }
 """
+
+# The window background is the only value that differs between the translucent
+# and opaque builds: `transparent` lets a compositor blur show through (the
+# frosted-glass look), while the Catppuccin base `#1e1e2e` paints a solid dark
+# panel for desktops with no blur. Everything else (controls, borders, the
+# darker tab-bar/body tones) is identical in both.
+_OPAQUE_WINDOW_BG = "#1e1e2e"
+
+
+def build_stylesheet(translucent: bool = True) -> str:
+    """Return the dialog stylesheet, translucent or opaque.
+
+    Pass the result of `core.env.blur_compositing_available()` as `translucent`
+    so the window only goes see-through when a blur will composite behind it.
+    """
+    bg = "transparent" if translucent else _OPAQUE_WINDOW_BG
+    return _STYLESHEET_TEMPLATE.replace("__WINDOW_BG__", bg)
+
+
+# Back-compat: importers that just want the default (translucent) sheet.
+STYLESHEET = build_stylesheet(True)

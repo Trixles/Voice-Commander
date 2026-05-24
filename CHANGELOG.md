@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] &mdash; 2026-05-24
+
+### Added
+- **"Open mic" and "Close mic" are now system commands** on the Commands
+  tab, with editable phrases and an enable/disable toggle like every other
+  system command. This replaces the dedicated "Open Mic" tab, whose only job
+  was editing those two phrase lists. Toggling a mic command off stops the
+  voice phrase (no "disabled" notification fires, since mic is matched in the
+  listener rather than by the fuzzy matcher); left-clicking the tray icon
+  still enters/exits open-mic mode regardless. Existing configs migrate
+  automatically on first load &mdash; your custom mic phrases are preserved,
+  and the old `open_mic_phrases` / `close_mic_phrases` keys are folded into
+  the commands list.
+
+### Changed
+- **System and slot-pinned command rows dropped their redundant "action"
+  column.** The action label only ever restated the locked name ("Close
+  window" / "Close window"), so it's gone; the name, "Options" button, and
+  enable toggle are now centered together as one group, with the per-row
+  separator sized to that button cluster rather than spanning the full width.
+  User command rows are unchanged.
+- **The settings window is translucent only when a compositor blur is actually
+  available.** Voice Commander now reads `kwinrc` and makes its window
+  translucent only when KWin's Blur effect (or a fork such as Better Blur) is
+  enabled; otherwise it paints as a solid opaque panel. Previously the window
+  was always translucent and relied on blur to look like frosted glass, so on
+  a desktop without blur it appeared see-through to the raw desktop.
+- **The "How to Use" tab is now called "About."**
+- The default "Open mic" / "Close mic" phrases dropped the "mike" spellings
+  ("open mike" / "close mike"); the built-in "mike" &rarr; "mic" override
+  already rewrites those.
+
+### Removed
+- The dedicated **"Open Mic" tab** &mdash; its phrase editing now lives on the
+  Commands tab as the "Open mic" and "Close mic" system commands (above).
+
 ## [0.7.0] &mdash; 2026-05-23
 
 ### Added
@@ -306,7 +342,11 @@ Initial public release.
   affects any external tool trying to place these browsers. Workaround:
   open the browser first, then use `"move to {monitor}"` to relocate it.
 
-[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Trixles/Voice-Commander/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/Trixles/Voice-Commander/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/Trixles/Voice-Commander/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/Trixles/Voice-Commander/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Trixles/Voice-Commander/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Trixles/Voice-Commander/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Trixles/Voice-Commander/compare/v0.1.0...v0.2.0

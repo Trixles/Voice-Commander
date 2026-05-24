@@ -15,9 +15,9 @@ import os
 import re
 import sys
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QIcon
-from PySide6.QtWidgets import QFrame, QLabel
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter
+from PySide6.QtWidgets import QAbstractButton, QFrame, QLabel, QWidget
 
 from core.aliases import PINNED_SLOT as _PINNED_SLOT
 from core.paths import CONFIG_PATH
@@ -47,7 +47,10 @@ _SELECTABLE_ACTIONS = [
 ]
 
 # Commands filtered out of the list entirely (managed as pinned slot rows).
-_HIDDEN_COMMANDS = {"move_to_monitor", "set_volume", "open_settings"}
+# open_settings used to live here too, but as of 0.7.0 it's a normal,
+# user-visible system row (toggleable, phrases editable) at the bottom of the
+# System Commands list -- see _SYSTEM_COMMAND_ORDER below.
+_HIDDEN_COMMANDS = {"move_to_monitor", "set_volume"}
 
 # Slot-pinned rows: permanently expanded, fully read-only, always at bottom.
 # Canonical definition lives in core/aliases.py; imported above.
@@ -73,7 +76,7 @@ _ACTION_LABELS = {
     "close_window":            "Close window",
     "move_window_to_monitor":  "Move window to monitor",  # was "Move to monitor" (renamed 0.6.0)
     "maximize_window":         "Maximize window",
-    "open_settings":           "Open settings",
+    "open_settings":           "Open VC settings",
 }
 
 # Confirmation-flow actions: shown as read-only note in the phrases body.
@@ -140,6 +143,7 @@ _SYSTEM_COMMAND_ORDER = [
     "logout",
     "restart",
     "shutdown",
+    "open_settings",       # 0.7.0: surfaced at the very bottom of the list
 ]
 
 # Names already warned about (unordered system commands) -- warn once per
@@ -259,3 +263,70 @@ def _h_rule() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
+
+
+# -- Toggle switch widget -----------------------------------------------------
+
+class ToggleSwitch(QAbstractButton):
+    """A custom-painted on/off pill toggle: grey (off) / green (on).
+
+    Lives on the enable/disable controls of the settings UI: system and
+    slot-pinned command rows (Commands tab) and default override rows
+    (Overrides tab, as of 0.7.0). Subclasses QAbstractButton so it is
+    checkable and gets the ``toggled(bool)`` signal for free -- callers
+    connect that to their dirty path. We do NOT override mousePressEvent:
+    QAbstractButton already toggles a checkable button and emits ``toggled``
+    on click, and overriding would risk a double-toggle. A styled checkable
+    QPushButton can't give the pill+thumb look, hence the manual paint.
+
+    Colours are the Catppuccin Mocha values used in style.py. The disabled
+    (greyed) palette is future-proofing -- nothing disables the widget itself
+    today; only the underlying enabled flag toggles.
+    """
+
+    _OFF_TRACK = QColor("#45475a")   # style.py border/surface grey
+    _OFF_THUMB = QColor("#a6adc8")   # style.py muted text
+    _ON_TRACK  = QColor("#46a34a")   # deeper green so the light thumb stands out
+    _ON_THUMB  = QColor("#cdd6f4")   # style.py default text
+    _DIS_TRACK = QColor("#313244")
+    _DIS_THUMB = QColor("#585b70")
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+
+    def sizeHint(self) -> QSize:
+        return QSize(44, 24)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        # Track: a pill inset 1px so the antialiased edge isn't clipped.
+        track = self.rect().adjusted(1, 1, -1, -1)
+        radius = track.height() / 2
+
+        if not self.isEnabled():
+            track_color, thumb_color = self._DIS_TRACK, self._DIS_THUMB
+        elif self.isChecked():
+            track_color, thumb_color = self._ON_TRACK, self._ON_THUMB
+        else:
+            track_color, thumb_color = self._OFF_TRACK, self._OFF_THUMB
+
+        painter.setBrush(track_color)
+        painter.drawRoundedRect(track, radius, radius)
+
+        # Thumb: a circle inset ~3px from the track edges, sliding left (off)
+        # to right (on).
+        inset = 3
+        diameter = track.height() - inset * 2
+        y = track.top() + inset
+        if self.isChecked():
+            x = track.right() - inset - diameter
+        else:
+            x = track.left() + inset
+        painter.setBrush(thumb_color)
+        painter.drawEllipse(int(x), int(y), int(diameter), int(diameter))

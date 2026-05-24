@@ -81,8 +81,14 @@ STYLESHEET = """
         border-color: #313244;
     }
     QTabWidget::pane {
+        /* Open at BOTH ends: no top border (tabs merge in at the top, same as
+           before) and no bottom border, so the pane's L/R borders flow
+           uninterrupted into the button bar's L/R borders below. The bar
+           closes the box at the bottom. Net effect: one continuous frame with
+           no horizontal divider above the buttons -- mirroring the top. */
         border: 1px solid #45475a;
         border-top: none;
+        border-bottom: none;
         background-color: transparent;
     }
     QTabBar::tab {
@@ -116,14 +122,14 @@ STYLESHEET = """
         border: none;
     }
     QWidget#btnBar {
-        /* Continue the bordered box from the tab pane above (which has L/R/B
-           borders, no top). The pane's bottom border doubles as this bar's
-           top divider, so the button row reads as part of the framed dialog
-           rather than a detached strip. */
+        /* Continue the bordered box from the tab pane above (which now has
+           L/R borders only -- open at both ends). No top border here, so the
+           button row flows seamlessly out of the pane with no horizontal
+           divider, mirroring how the tab row merges into the body at the top.
+           L/R continue the frame; the bottom border closes the box. */
         border-left: 1px solid #45475a;
         border-right: 1px solid #45475a;
         border-bottom: 1px solid #45475a;
-        border-top: 1px solid #45475a;
     }
     QFrame#monitorFrame {
         border: 1px solid #45475a;

@@ -28,9 +28,9 @@ import re
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QSize, QSortFilterProxyModel, Signal
-from PySide6.QtGui import QColor, QPainter, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractButton, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
+    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListView, QPlainTextEdit, QPushButton,
     QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -39,7 +39,7 @@ from core.aliases import PINNED_SLOT as _PINNED_SLOT
 from core.settings.helpers import (
     APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY,
     _ACTION_LABELS, _CONFIRM_ACTIONS, _CONFIRM_NOTE, _HIDDEN_COMMANDS,
-    _PINNED_SLOT_NAMES, _SELECTABLE_ACTIONS,
+    _PINNED_SLOT_NAMES, _SELECTABLE_ACTIONS, ToggleSwitch,
     _display_name_from_action, _display_name_from_slug, _h_rule,
     _is_user_action, _load_desktop_apps, _section_label, _slug_from_name,
     _sort_key,
@@ -49,70 +49,22 @@ if TYPE_CHECKING:
     from core.settings.dialog import SettingsDialog
 
 
-# -- Toggle switch widget -----------------------------------------------------
+# -- Scroll-safe combo box ----------------------------------------------------
 
-class ToggleSwitch(QAbstractButton):
-    """A custom-painted on/off pill toggle: grey (off) / green (on).
+class NoScrollComboBox(QComboBox):
+    """A QComboBox that ignores the scroll wheel.
 
-    Lives on system and slot-pinned command rows to flip the command's
-    ``enabled`` flag. Subclasses QAbstractButton so it is checkable and gets
-    the ``toggled(bool)`` signal for free -- CommandRow connects that to its
-    dirty path. We do NOT override mousePressEvent: QAbstractButton already
-    toggles a checkable button and emits ``toggled`` on click, and overriding
-    would risk a double-toggle. A styled checkable QPushButton can't give the
-    pill+thumb look, hence the manual paint.
-
-    Colours are the Catppuccin Mocha values used in style.py. The disabled
-    (greyed) palette is future-proofing -- 0.6.0 never disables the widget
-    itself; only the underlying command's ``enabled`` flag toggles.
+    The action dropdown lives in a scrollable list of command rows. With the
+    default behaviour, scrolling the page while the pointer happens to be over
+    a dropdown silently changes that command's action -- an easy and
+    destructive misclick. Ignoring the wheel event here both blocks the
+    selection change AND lets the parent scroll area receive the event, so the
+    page still scrolls. To pick a new action the user must click the dropdown
+    open; the popup's own list still scrolls normally (it's a separate widget).
     """
 
-    _OFF_TRACK = QColor("#45475a")   # style.py border/surface grey
-    _OFF_THUMB = QColor("#a6adc8")   # style.py muted text
-    _ON_TRACK  = QColor("#46a34a")   # deeper green so the light thumb stands out
-    _ON_THUMB  = QColor("#cdd6f4")   # style.py default text
-    _DIS_TRACK = QColor("#313244")
-    _DIS_THUMB = QColor("#585b70")
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setCheckable(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-
-    def sizeHint(self) -> QSize:
-        return QSize(44, 24)
-
-    def paintEvent(self, _event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(Qt.PenStyle.NoPen)
-
-        # Track: a pill inset 1px so the antialiased edge isn't clipped.
-        track = self.rect().adjusted(1, 1, -1, -1)
-        radius = track.height() / 2
-
-        if not self.isEnabled():
-            track_color, thumb_color = self._DIS_TRACK, self._DIS_THUMB
-        elif self.isChecked():
-            track_color, thumb_color = self._ON_TRACK, self._ON_THUMB
-        else:
-            track_color, thumb_color = self._OFF_TRACK, self._OFF_THUMB
-
-        painter.setBrush(track_color)
-        painter.drawRoundedRect(track, radius, radius)
-
-        # Thumb: a circle inset ~3px from the track edges, sliding left (off)
-        # to right (on).
-        inset = 3
-        diameter = track.height() - inset * 2
-        y = track.top() + inset
-        if self.isChecked():
-            x = track.right() - inset - diameter
-        else:
-            x = track.left() + inset
-        painter.setBrush(thumb_color)
-        painter.drawEllipse(int(x), int(y), int(diameter), int(diameter))
+    def wheelEvent(self, event) -> None:
+        event.ignore()
 
 
 # -- App picker popup ---------------------------------------------------------
@@ -329,7 +281,9 @@ class CommandRow(QWidget):
             h.addWidget(self._expand_btn)
         else:
             # User-editable row: dropdown of _SELECTABLE_ACTIONS only.
-            self._action_combo = QComboBox()
+            # NoScrollComboBox so wheel-scrolling the page can't silently
+            # change the action (see class docstring).
+            self._action_combo = NoScrollComboBox()
             self._action_combo.setFixedWidth(160)
             for key in _SELECTABLE_ACTIONS:
                 self._action_combo.addItem(_ACTION_LABELS.get(key, key), userData=key)
@@ -778,12 +732,13 @@ class CommandsContainer(QWidget):
         layout.addStretch()
 
         # Build the row set. User + system commands come from commands.json
-        # (minus _HIDDEN_COMMANDS, which removes open_settings AND the two
-        # slot-pinned names). Slot-pinned rows get their canonical definition
-        # from _PINNED_SLOT instead, merged with the user's saved `enabled`
-        # state off disk. Everything is sorted together by _sort_key (user A-Z,
-        # then system + slot-pinned interleaved per _SYSTEM_COMMAND_ORDER) and
-        # routed into the matching section layout.
+        # (minus _HIDDEN_COMMANDS, which removes the two slot-pinned names --
+        # open_settings is a normal system row as of 0.7.0). Slot-pinned rows
+        # get their canonical definition from _PINNED_SLOT instead, merged with
+        # the user's saved `enabled` state off disk. Everything is sorted
+        # together by _sort_key (user A-Z, then system + slot-pinned
+        # interleaved per _SYSTEM_COMMAND_ORDER) and routed into the matching
+        # section layout.
         on_disk_by_name = {c.get("name"): c for c in commands}
         candidates = [c for c in commands if c.get("name") not in _HIDDEN_COMMANDS]
         for pinned in _PINNED_SLOT:

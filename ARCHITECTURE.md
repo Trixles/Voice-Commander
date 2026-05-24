@@ -68,9 +68,12 @@ companion — keep them in sync.
      mic AGC artifacts the user never said. Currently a single rule
      (strip leading `"the "`). Plumbing, not user-facing.
   2. `apply_overrides()` in `core/overrides.py` — user-configurable
-     mishearing rewrites (Vosk heard X, user meant Y). Defaults from
-     `DEFAULT_OVERRIDES` plus user-added rules from
-     `commands.json["overrides"]`, in that order.
+     mishearing rewrites (Vosk heard X, user meant Y). `get_overrides()`
+     in `commands.py` assembles the final list: **USER rules first**, then
+     the enabled `DEFAULT_OVERRIDES` (minus any the user disabled — see
+     "Default overrides toggle via a disabled-pattern list"). Rules apply
+     sequentially, so user-first means a user rule wins a same-span conflict
+     with a default, matching the Overrides tab's top-to-bottom layout.
 - **Why:** Categorically different mechanisms. AGC hallucinations
   are noise artifacts; mishearings are recognition errors. Mixing
   them in one place either exposes plumbing to the user (confusing)
@@ -126,7 +129,9 @@ companion — keep them in sync.
   collapse-by-default behavior; the only difference is their body shows a
   read-only phrase with a "cannot be edited" note. The bottom-most system
   row has no separator line beneath it. Pre-0.6.0 this was three separate
-  tiers. Full spec in `core/settings/dialog.py` module docstring.
+  tiers. Full spec in `core/settings/dialog.py` module docstring. As of 0.7.0
+  the Overrides tab mirrors this two-section User/System layout — see "Default
+  overrides toggle via a disabled-pattern list".
 - **Don't:** Add system actions to the dropdown. Make system names editable.
   Add delete to system rows (they get a toggle instead). Re-separate
   slot-pinned as its own tier — the structural distinction it once had (no
@@ -155,6 +160,39 @@ companion — keep them in sync.
   user-action rows. Abort a chain on a disabled segment. Check the `enabled`
   flag before scoring (best-match-then-check-enabled is deliberate, so an
   enabled lower-scorer can't shadow a disabled higher-scorer).
+
+### Default overrides toggle via a disabled-pattern list, filtered at assembly
+- **What:** The shipped `DEFAULT_OVERRIDES` (`core/overrides.py`) can each be
+  toggled off in the Overrides tab. Disabled defaults are stored by **pattern
+  string** under `commands.json["disabled_default_overrides"]` (a list);
+  `get_overrides()` (`commands.py`) filters them out of `DEFAULT_OVERRIDES`,
+  then appends the survivors AFTER the user rules (user-first — see "Vosk
+  normalization split"). Absent/empty key = all defaults on (back-compat).
+  The default rules themselves are NEVER persisted — only the set of disabled
+  patterns.
+- **Why a pattern list, not per-row `enabled` flags on disk:** defaults are
+  append-only and never removed (`core/overrides.py`), so the shipped list
+  grows across versions. Storing only the disabled patterns means a newly
+  shipped default is enabled automatically and there are no stale on-disk
+  copies of the default rules to drift from the code.
+- **Why filter at assembly, NOT the commands' matched-but-not-dispatched
+  sentinel:** overrides are pre-match text rewrites with no dispatch/chain
+  stage, so dropping a disabled rule at `get_overrides()` time is correct and
+  has none of the chain-misfire problems that made load-time filtering wrong
+  for commands (contrast "Disabled commands are matched but not dispatched").
+- **UI:** the Overrides tab mirrors the Commands two-section layout — "User
+  Overrides" (editable, deletable, 44px red X) above "System Overrides"
+  (locked pattern, 44px enable/disable `ToggleSwitch`). Each row owns its
+  separator (`_bottom_rule`); the last default row's is hidden.
+  `OverridesContainer.collect_disabled_defaults()` returns the disabled
+  patterns; `_save()` always writes the key (so re-enabling persists);
+  `_reset_overrides()` clears it (re-enable all). The Overrides tab's
+  "Restore Defaults" wipes user rules AND re-enables all defaults.
+- **Where `ToggleSwitch` lives:** `core/settings/helpers.py` (shared by the
+  Commands and Overrides tabs), not `commands_tab.py`.
+- **Don't:** Persist the default rules themselves. Add an `enabled` field to
+  user override rows (their removal mechanism is the delete X). Filter
+  disabled defaults anywhere but `get_overrides()`.
 
 ### Centering inside a settings row uses a structural anchor, not a computed offset
 - **What:** When a row needs a centered element, split the row at the

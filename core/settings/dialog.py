@@ -160,7 +160,7 @@ class SettingsDialog(QDialog):
             "Commands":  (self._reset_commands,
                           "Restore the default set of commands (does not affect wake words, displays, overrides, or other settings)."),
             "Overrides": (self._reset_overrides,
-                          "Remove all user-added override rules. Built-in defaults are unaffected."),
+                          "Remove all user-added override rules and re-enable every built-in default."),
             "Displays":  (self._reset_displays,
                           "Reset every monitor's aliases to the shipped defaults (Display 1, Display 2, ...)."),
             "Open Mic":  (self._reset_open_mic,
@@ -344,6 +344,7 @@ class SettingsDialog(QDialog):
 
         commands = self._commands_container.collect()
         overrides = self._overrides_container.collect()
+        disabled_default_overrides = self._overrides_container.collect_disabled_defaults()
 
         monitors: dict = dict(self._config.get("monitors", {}))
         for row in self._monitor_rows:
@@ -363,8 +364,10 @@ class SettingsDialog(QDialog):
         # Merge UI-collected commands with hidden commands from old config.
         # `commands` already includes _PINNED_SLOT (set_volume, move_to_monitor)
         # via CommandsContainer.collect(). `hidden` re-injects everything in
-        # _HIDDEN_COMMANDS that exists on disk -- this is the only place
-        # `open_settings` survives a save, since it's never in the UI.
+        # _HIDDEN_COMMANDS that exists on disk. As of 0.7.0 _HIDDEN_COMMANDS is
+        # just the two slot-pinned names, which `commands` already supplies via
+        # _PINNED_SLOT -- so this merge is now defensive (dedup drops the
+        # duplicates). open_settings is collected as a normal system row.
         # Dedup by name with `commands` winning ties so the canonical pinned
         # versions don't get shadowed by stale duplicates from disk.
         hidden = [c for c in self._config.get("commands", [])
@@ -380,6 +383,10 @@ class SettingsDialog(QDialog):
         new_config["commands"] = deduped
         # Always write overrides (even when empty) so deleting all user rules persists.
         new_config["overrides"] = overrides
+        # Always write the disabled-default set too (even when empty) so
+        # re-enabling a previously-disabled default persists. get_overrides()
+        # filters DEFAULT_OVERRIDES by this list at runtime.
+        new_config["disabled_default_overrides"] = disabled_default_overrides
 
         if monitors:
             new_config["monitors"] = monitors
@@ -474,16 +481,17 @@ class SettingsDialog(QDialog):
 
     def _reset_overrides(self) -> None:
         """
-        Confirm, then clear all user-added overrides. Built-in defaults
-        (DEFAULT_OVERRIDES) are code-shipped and always present, so 'restoring
-        defaults' for overrides simply means wiping the user-added list.
+        Confirm, then restore the Overrides tab to its shipped state: wipe all
+        user-added overrides AND re-enable every built-in default (clear the
+        disabled-default set). The defaults themselves are code-shipped
+        (DEFAULT_OVERRIDES), so "restoring defaults" means an empty user list
+        plus all defaults switched back on.
         """
         reply = QMessageBox.question(
             self,
-            "Clear User Overrides?",
-            "This will remove every override you have added.\n\n"
-            "The built-in defaults at the bottom of the list are unaffected -- "
-            "they ship with Voice Commander and are always present.\n\n"
+            "Restore Default Overrides?",
+            "This will remove every override you have added AND switch every "
+            "built-in default back on.\n\n"
             "This cannot be undone. Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -495,6 +503,8 @@ class SettingsDialog(QDialog):
             with open(CONFIG_PATH, "r") as f:
                 data = json.load(f)
             data["overrides"] = []
+            # Re-enable all defaults (empty disabled set).
+            data["disabled_default_overrides"] = []
             _write_config(data)
             import core.commands as _cmds
             _cmds.load_config()
@@ -506,9 +516,10 @@ class SettingsDialog(QDialog):
 
         QMessageBox.information(
             self,
-            "Overrides cleared",
-            "User overrides have been cleared. The settings window will close; "
-            "reopen it to see the updated list.",
+            "Defaults restored",
+            "User overrides have been cleared and all built-in defaults "
+            "re-enabled. The settings window will close; reopen it to see the "
+            "updated list.",
         )
         self.accept()
 

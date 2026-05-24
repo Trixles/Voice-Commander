@@ -102,10 +102,19 @@ def build(dialog: "SettingsDialog") -> QWidget:
     dialog._log_view.setReadOnly(True)
     dialog._log_view.setMinimumHeight(300)
     dialog._log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+    # Scope the rule to `QTextEdit { ... }`. A bare-declaration stylesheet
+    # (no selector) bleeds onto the widget's child sub-controls, including the
+    # vertical scrollbar -- it picked up the border outline but lost the
+    # handle fill, so the scrollbar rendered as a hollow groove with no
+    # draggable handle. Scoping to the type selector keeps the frame styling
+    # on the QTextEdit only; the dialog-wide QScrollBar::handle rule in
+    # style.py then governs the handle (visible #45475a, min-height 24px).
     dialog._log_view.setStyleSheet(
-        "font-family: monospace; font-size: 9pt; "
-        "background-color: #11111b; "
-        "border: 1px solid #45475a; border-radius: 4px; padding: 6px;"
+        "QTextEdit {"
+        "  font-family: monospace; font-size: 9pt;"
+        "  background-color: #11111b;"
+        "  border: 1px solid #45475a; border-radius: 4px; padding: 6px;"
+        "}"
     )
     # Wayland workaround: read-only QTextEdit doesn't auto-populate the
     # PRIMARY selection clipboard, and the 500ms refresh wipes any

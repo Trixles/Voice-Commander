@@ -262,9 +262,11 @@ def _default_commands() -> list[dict]:
         "args": {},
     })
     commands.append({
+        # Single phrase by design: "open settings" is deliberately NOT a
+        # default so it stays free for the user's OS/system-settings command.
         "name": "open_settings",
-        "display_name": "Open Settings",
-        "phrases": ["open settings", "voice commander settings", "open voice commander settings"],
+        "display_name": "Open VC settings",
+        "phrases": ["open voice commander settings"],
         "action": "open_settings",
         "args": {},
     })
@@ -396,14 +398,29 @@ def get_close_mic_phrases() -> set[str]:
 
 def get_overrides() -> list[dict]:
     """Return the full ordered list of overrides to apply.
-    Defaults come first; user-added rules from commands.json follow.
-    Users cannot disable a default, but can shadow one by adding a
-    user rule with the same pattern (later rules apply to text already
-    rewritten by earlier rules)."""
+
+    USER rules come first, then the enabled built-in defaults. Overrides apply
+    sequentially (each rewrite feeds the next), so the first rule to touch a
+    span wins it -- user-first means a user rule beats a colliding default of
+    the same pattern. This matches the Overrides tab's top-to-bottom layout
+    (User section on top = runs first). A user with no overrides sees
+    defaults-only behaviour, unchanged.
+
+    A default can also be toggled off in Settings. Disabled defaults are
+    stored by pattern under the "disabled_default_overrides" config key and
+    filtered out here. The defaults themselves are never persisted (they live
+    in DEFAULT_OVERRIDES); only the set of disabled patterns is stored, so the
+    shipped default list can grow across versions without stale copies on
+    disk."""
     user = _config.get("overrides", [])
     if not isinstance(user, list):
         user = []
-    return list(DEFAULT_OVERRIDES) + user
+    disabled = _config.get("disabled_default_overrides", [])
+    if not isinstance(disabled, list):
+        disabled = []
+    disabled_set = set(disabled)
+    defaults = [d for d in DEFAULT_OVERRIDES if d["pattern"] not in disabled_set]
+    return user + defaults
 
 
 _DEFAULT_VOSK_MODEL_DIR  = os.path.expanduser("~/.local/share/voice-commander/vosk-model/")

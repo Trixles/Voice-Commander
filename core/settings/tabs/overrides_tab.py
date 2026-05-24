@@ -5,9 +5,13 @@ The "Overrides" tab plus its two row widgets:
 
   OverrideRow         -- one pattern -> replacement row, with the arrow
                          column anchored to the row centre via equal-
-                         stretch half-widgets (see class docstring).
-  OverridesContainer  -- the user-rows-above-defaults layout plus the
-                         + Add Override button.
+                         stretch half-widgets (see class docstring). User
+                         rows carry a delete X; default rows carry an
+                         enable/disable toggle.
+  OverridesContainer  -- two sections ("User Overrides" / "System
+                         Overrides"), mirroring the Commands tab: user rows
+                         (with the + Add Override button) above the locked,
+                         toggleable defaults.
 
 `build(dialog)` constructs the tab QWidget and sets
 `dialog._overrides_container`, which SettingsDialog._build_ui wires
@@ -29,7 +33,7 @@ from core.overrides import (
     is_valid as _is_valid_override,
     sanitize as _sanitize_override,
 )
-from core.settings.helpers import _section_label
+from core.settings.helpers import ToggleSwitch, _h_rule, _section_label
 
 if TYPE_CHECKING:
     from core.settings.dialog import SettingsDialog
@@ -39,64 +43,58 @@ if TYPE_CHECKING:
 
 class OverrideRow(QWidget):
     """
-    One row in the Overrides tab. Two text fields side-by-side:
-        [ pattern ]  ->  [ replacement ]  [X]
+    One row in the Overrides tab. Two text fields side-by-side with a
+    right-edge control:
+        [ pattern ]  ->  [ replacement ]  [ X | toggle ]
 
-    Layout recipe -- the row is split into two equal-stretch halves with
-    the arrow as the bridge between them, so the arrow column is anchored
+    Layout recipe -- the row content is split into two equal-stretch halves
+    with the arrow as the bridge between them, so the arrow column is anchored
     to the SAME horizontal-center reference the parent uses to center the
     "+ Add Override" button above the rows. This means: arrow follows the
     dialog's true horizontal midpoint at any width, with no calibration
-    constants.
+    constants. (ARCHITECTURE: "Centering inside a settings row uses a
+    structural anchor, not a computed offset".)
 
-    Outer layout:
+    Top-level layout (vertical), mirroring CommandRow so each row owns its own
+    separator line:
+      [ content (the horizontal row) ]
+      [ _bottom_rule (per-row separator; container hides the last one) ]
+
+    Content layout (horizontal):
       [ left half (stretch=1) ][ arrow (no stretch) ][ right half (stretch=1) ]
 
     Left half:  [ pattern (Expanding) ]
-    Right half: [ becomes (Expanding) ][ X (fixed 28px) ]
+    Right half: [ replacement (Expanding) ][ right-edge control (fixed 44px) ]
 
-    Pattern fills the left half edge-to-edge; becomes+X fill the right
-    half. Because the two halves have equal stretch on the outer layout,
-    the arrow lands exactly at the row center -- which is the same x as
-    the centered Add Override button.
+    The right-edge control is ALWAYS 44px wide so the pattern/replacement
+    columns stay flush across user and default rows (the 44px mirrors the
+    Commands tab, where the delete button was widened to match the toggle):
+      - user rows (is_default=False): editable fields + a red 44x28 delete X.
+      - default rows (is_default=True): read-only greyed fields + a 44x24
+        ToggleSwitch, exactly like the Commands tab's system rows. The 24-tall
+        toggle centers vertically within the 28-tall row.
 
-    Net visual result:
-      - All rows: pattern left, pattern right, arrow center, and
-        becomes-left all align at the same x across user and default rows.
-        Pattern fills [left-margin, row-center]. (Same width on every row
-        because the left half is identical across row types.)
-      - User rows end with [becomes][X]. X right edge = row right edge.
-      - Default rows: X is hidden. Becomes is the only Expanding widget
-        in the right half so it absorbs the freed X slot, extending out
-        to where the user-row X right edge sits.
-
-    Why split halves instead of one flat row: with a single flat row,
-    centering the arrow at the dialog midpoint requires either a fixed-
-    width pattern (which breaks font scaling) or a hand-tuned minimum
-    width on pattern (which only lands at midpoint at one specific
-    dialog width). The split-halves design uses Qt's own stretch math
-    to anchor the arrow at center -- it's the same mechanism that
-    centers the Add Override button, just applied to a row.
-
-    Two modes:
-      - is_default=True : both fields read-only and greyed (inherit
-        QLineEdit:read-only styling). X is hidden; becomes (the only
-        Expanding widget in the right half) absorbs the freed slot.
-      - is_default=False: editable user row. The red X is visible and
-        deletes the row (visual-only until Save).
-
-    Emits `dirtied` whenever either field changes (user rows only --
-    default rows are read-only so they never fire).
+    Emits `dirtied` on any user-driven change: pattern/replacement edits on
+    user rows, or the enable toggle flipping on default rows.
     """
 
     dirtied = Signal()
     delete_requested = Signal(object)  # passes self to parent container
 
-    def __init__(self, pattern: str, replacement: str, is_default: bool = False, parent=None):
+    def __init__(self, pattern: str, replacement: str, is_default: bool = False,
+                 enabled: bool = True, parent=None):
         super().__init__(parent)
         self._is_default = is_default
+        # Stable identity for defaults: get_overrides() / collect_disabled_
+        # defaults() key on the pattern string, not the (read-only) field text.
+        self._pattern_value = pattern
 
-        outer = QHBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        content = QWidget()
+        outer = QHBoxLayout(content)
         # Left/right margins 0 so rows start flush at the parent content
         # edge -- the parent (_make_scroll_tab) already adds 16px padding.
         outer.setContentsMargins(0, 3, 0, 3)
@@ -115,11 +113,11 @@ class OverrideRow(QWidget):
         lh.addWidget(self._pattern_edit)
 
         # -- The bridge: arrow with no stretch, sits between halves ------
-        arrow = QLabel("\u2192")  # rightwards arrow
+        arrow = QLabel("→")  # rightwards arrow
         arrow.setStyleSheet("color: #a6adc8; padding: 0 2px;")
         arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # -- Right half: becomes (Expanding) + X (fixed) -----------------
+        # -- Right half: replacement (Expanding) + 44px right-edge control
         right_half = QWidget()
         rh = QHBoxLayout(right_half)
         rh.setContentsMargins(0, 0, 0, 0)
@@ -131,36 +129,51 @@ class OverrideRow(QWidget):
                                               QSizePolicy.Policy.Fixed)
         rh.addWidget(self._replacement_edit)
 
-        self._delete_btn = QPushButton("\u2715")  # multiplication x
-        self._delete_btn.setObjectName("deleteBtn")
-        self._delete_btn.setFixedSize(28, 28)
-        self._delete_btn.setToolTip("Delete this override")
-        self._delete_btn.clicked.connect(lambda: self.delete_requested.emit(self))
+        # Right-edge control. Default rows get the enable/disable toggle; user
+        # rows get the delete X. Both occupy 44px so the columns stay flush
+        # vertically across row types (mirror of the Commands tab recipe).
         if is_default:
-            # Just setVisible(False). Default retainSizeWhenHidden is False,
-            # so the slot frees and becomes (the only Expanding widget in
-            # the right half) absorbs it. Mirrors CommandRow's recipe.
-            self._delete_btn.setVisible(False)
-        rh.addWidget(self._delete_btn)
+            self._delete_btn = None
+            self._enable_toggle = ToggleSwitch()
+            self._enable_toggle.setChecked(enabled)
+            self._enable_toggle.setToolTip("Enable / disable this override")
+            rh.addWidget(self._enable_toggle)
+        else:
+            self._enable_toggle = None
+            self._delete_btn = QPushButton("✕")  # multiplication x
+            self._delete_btn.setObjectName("deleteBtn")
+            self._delete_btn.setFixedSize(44, 28)
+            self._delete_btn.setToolTip("Delete this override")
+            self._delete_btn.clicked.connect(lambda: self.delete_requested.emit(self))
+            rh.addWidget(self._delete_btn)
 
         if is_default:
             self._pattern_edit.setReadOnly(True)
             self._replacement_edit.setReadOnly(True)
-            tip = "Built-in default. Cannot be edited or removed."
+            tip = "Built-in default. Toggle it on or off; the pattern can't be edited."
             self._pattern_edit.setToolTip(tip)
             self._replacement_edit.setToolTip(tip)
 
-        # Equal stretch on left and right halves means their boundary IS
-        # the row center. Arrow has no stretch, so it stays parked at the
-        # boundary.
+        # Equal stretch on left and right halves means their boundary IS the
+        # row center. Arrow has no stretch, so it stays parked at the boundary.
         outer.addWidget(left_half, 1)
         outer.addWidget(arrow)
         outer.addWidget(right_half, 1)
 
-        # Wire dirty AFTER initial setText (the constructor sets text via
-        # QLineEdit(pattern) which doesn't fire textChanged anyway, but we
-        # also avoid connecting on default rows since they're read-only).
-        if not is_default:
+        root.addWidget(content)
+
+        # Per-row separator line. Stored so the container can hide it on the
+        # last default row (the bottom-most row needs no line beneath it).
+        self._bottom_rule = _h_rule()
+        root.addWidget(self._bottom_rule)
+
+        # Wire dirty AFTER the initial setText / setChecked above (QLineEdit(
+        # pattern) doesn't fire textChanged, and the toggle's setChecked must
+        # not count as a user edit). Default rows are read-only except for the
+        # toggle, so only the toggle feeds dirty there.
+        if is_default:
+            self._enable_toggle.toggled.connect(self.dirtied)
+        else:
             self._pattern_edit.textChanged.connect(self.dirtied)
             self._replacement_edit.textChanged.connect(self.dirtied)
 
@@ -180,60 +193,87 @@ class OverrideRow(QWidget):
     def is_default(self) -> bool:
         return self._is_default
 
+    @property
+    def is_enabled(self) -> bool:
+        """Default rows: True iff the toggle is on. User rows: always True
+        (they have no toggle)."""
+        if self._enable_toggle is None:
+            return True
+        return self._enable_toggle.isChecked()
+
 
 class OverridesContainer(QWidget):
     """
-    Manages the list of OverrideRow widgets in the Overrides tab.
+    Manages the OverrideRow widgets in the Overrides tab.
 
-    Layout (top to bottom):
-        [+ Add Override]
-        [user row 1]      (editable, with X)
-        [user row 2]
-        ...
-        [default row 1]   (locked, greyed)
-        [default row 2]
-        ...
+    Two sections, mirroring the Commands tab's User/System split:
 
-    User rows render ABOVE defaults purely cosmetically -- the runtime
-    execution order in commands.get_overrides() still puts defaults first.
-    User rows live at the top so the user's own work is what they see first;
-    the defaults sit below as 'foundational, can't-touch-this' reference.
+        User Overrides
+          [+ Add Override]
+          [user row 1]      (editable, with red X)
+          ...
+        System Overrides
+          [default row 1]   (locked pattern, enable/disable toggle)
+          ...
 
-    Defaults are never collected (they live in DEFAULT_OVERRIDES, not config).
-    New user rows append at the BOTTOM of the user-rows group (just above
-    the defaults), so the first-match-wins order matches the visual order.
+    User rows render ABOVE defaults, and that visual order matches the runtime
+    order: commands.get_overrides() applies USER rules first, then enabled
+    defaults, so a user rule wins a same-word conflict with a default (the
+    first rule to touch a span wins it). Top-to-bottom = first-to-last.
 
-    All rows share a single QVBoxLayout so QLineEdit columns align across
-    user and default rows -- mixing layouts produces drift.
+    A default can be toggled off. Disabled defaults are reported by
+    `collect_disabled_defaults()` as a list of pattern strings and persisted
+    under commands.json["disabled_default_overrides"]; get_overrides() filters
+    them out at runtime. The defaults themselves are NEVER collected -- they
+    live in DEFAULT_OVERRIDES, so the shipped list can grow across versions
+    without stale copies on disk.
+
+    New user rows append at the BOTTOM of the user-rows group (just above the
+    System Overrides header), so first-match order matches visual order.
 
     Red X deletes the row from the UI and marks the dialog dirty, but does
-    NOT persist until the Save button is clicked. Same as every other
-    editable widget in this dialog -- consistency with the Commands tab
-    and the general dirty-tracking contract is more important than the
-    'instant delete' affordance.
+    NOT persist until Save -- same dirty-tracking contract as the Commands
+    tab. Each row owns its own separator line; the last default row's line is
+    hidden (the bottom-most row needs none).
     """
 
     dirtied = Signal()
 
-    def __init__(self, user_overrides: list[dict], parent=None):
+    _BLURB_CSS = "color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;"
+
+    def __init__(self, user_overrides: list[dict],
+                 disabled_default_patterns: list[str] | None = None, parent=None):
         super().__init__(parent)
         self._user_rows: list[OverrideRow] = []
         self._default_rows: list[OverrideRow] = []
+        disabled_set = set(disabled_default_patterns or [])
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setSpacing(8)
+
+        # ---- User Overrides section ----------------------------------------
+        layout.addWidget(_section_label("User Overrides"))
+        user_blurb = QLabel(
+            "Rewrite specific Vosk mishearings before the matcher sees them -- "
+            "useful when Vosk consistently mishears the same word (e.g. it "
+            "transcribes \"cause\" when you say \"close\"). Patterns match whole "
+            "words only: a rule for \"in\" will not corrupt \"open\". Add one with "
+            "the button below; remove one with its ✕."
+        )
+        user_blurb.setWordWrap(True)
+        user_blurb.setStyleSheet(self._BLURB_CSS)
+        layout.addWidget(user_blurb)
 
         add_btn = QPushButton("+ Add Override")
         add_btn.setFixedWidth(130)
         add_btn.clicked.connect(self._add_blank_row)
         layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addSpacing(8)
 
-        # User rows live in their own sublayout so we can insert new rows
-        # at the bottom of THIS group (just above defaults) without poking
-        # into the parent layout's index math. Both sublayouts share the
-        # same parent margins/spacing, so column alignment is preserved.
+        # User rows live in their own sublayout so we can append new rows at
+        # the bottom of THIS group (just above the System Overrides header)
+        # without poking into the parent layout's index math. Both sublayouts
+        # share the same parent margins/spacing, so column alignment holds.
         self._user_rows_layout = QVBoxLayout()
         self._user_rows_layout.setContentsMargins(0, 0, 0, 0)
         self._user_rows_layout.setSpacing(0)
@@ -248,17 +288,52 @@ class OverridesContainer(QWidget):
                 continue
             self._append_user_row(OverrideRow(pattern, replacement, is_default=False))
 
-        # Defaults: locked, rendered below user rows.
+        # ---- System Overrides section --------------------------------------
+        # Section divider. When there ARE user rows, the last user row's own
+        # separator line divides the two sections (matching the Commands tab),
+        # so this explicit rule hides to avoid a double line. When there are
+        # NO user rows, this rule is the divider so the sections are always
+        # visually separated. Visibility is managed by _update_section_rule().
+        self._section_rule = _h_rule()
+        layout.addWidget(self._section_rule)
+
+        layout.addWidget(_section_label("System Overrides"))
+        sys_blurb = QLabel(
+            "Built-in rewrites that ship with Voice Commander, covering common "
+            "mishearings. Their patterns cannot be edited or deleted, but you "
+            "can toggle each one on or off."
+        )
+        sys_blurb.setWordWrap(True)
+        sys_blurb.setStyleSheet(self._BLURB_CSS)
+        layout.addWidget(sys_blurb)
+
         self._defaults_layout = QVBoxLayout()
         self._defaults_layout.setContentsMargins(0, 0, 0, 0)
         self._defaults_layout.setSpacing(0)
         for d in DEFAULT_OVERRIDES:
-            row = OverrideRow(d["pattern"], d["replacement"], is_default=True)
+            enabled = d["pattern"] not in disabled_set
+            row = OverrideRow(d["pattern"], d["replacement"],
+                              is_default=True, enabled=enabled)
+            row.dirtied.connect(self.dirtied)
             self._default_rows.append(row)
             self._defaults_layout.addWidget(row)
         layout.addLayout(self._defaults_layout)
 
         layout.addStretch()
+
+        # The bottom-most default row is the last row in the whole tab, so it
+        # gets no separator line beneath it.
+        if self._default_rows:
+            self._default_rows[-1]._bottom_rule.setVisible(False)
+
+        self._update_section_rule()
+
+    def _update_section_rule(self) -> None:
+        """Show the explicit User/System divider only when there are no user
+        rows. With user rows present, the last user row's own separator line
+        divides the sections (matching the Commands tab), so this rule hides
+        to avoid a double line."""
+        self._section_rule.setVisible(not self._user_rows)
 
     def _append_user_row(self, row: OverrideRow) -> None:
         self._user_rows.append(row)
@@ -269,6 +344,7 @@ class OverridesContainer(QWidget):
     def _add_blank_row(self) -> None:
         row = OverrideRow("", "", is_default=False)
         self._append_user_row(row)
+        self._update_section_rule()
         # Adding a row is itself a dirty change.
         self.dirtied.emit()
 
@@ -277,6 +353,7 @@ class OverridesContainer(QWidget):
             self._user_rows.remove(row)
             self._user_rows_layout.removeWidget(row)
             row.deleteLater()
+            self._update_section_rule()
             self.dirtied.emit()
 
     def collect(self) -> list[dict]:
@@ -305,6 +382,15 @@ class OverridesContainer(QWidget):
             seen[pattern] = d  # last-write-wins on duplicate patterns
         return [seen[k] for k in ordered_keys]
 
+    def collect_disabled_defaults(self) -> list[str]:
+        """Patterns of the built-in defaults the user has toggled OFF, to
+        persist under commands.json["disabled_default_overrides"].
+        get_overrides() filters these out at runtime.
+
+        Same isVisible() caveat as collect(): iterate _default_rows directly,
+        not by visibility."""
+        return [r._pattern_value for r in self._default_rows if not r.is_enabled]
+
 
 # -- Tab builder --------------------------------------------------------------
 
@@ -315,21 +401,10 @@ def build(dialog: "SettingsDialog") -> QWidget:
       dialog._overrides_container -- the OverridesContainer instance
 
     SettingsDialog._build_ui wires the dirty-tracking signal after every
-    tab has been built.
+    tab has been built. The two section headers + blurbs live inside the
+    container (mirroring CommandsContainer), so this builder just wraps it.
     """
     tab, cl = dialog._make_scroll_tab()
-    cl.addWidget(_section_label("Overrides"))
-    blurb = QLabel(
-        "Rewrite specific Vosk mishearings before the matcher sees them. "
-        "Useful when Vosk consistently mishears the same word (e.g. it transcribes "
-        "\"cause\" when you say \"close\"). Patterns match whole words only -- "
-        "a rule for \"in\" will not corrupt \"open\". Rules apply top-to-bottom; "
-        "if two rules touch the same text, the first one wins. Locked rows at "
-        "the top are built-in defaults that ship with Voice Commander."
-    )
-    blurb.setWordWrap(True)
-    blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
-    cl.addWidget(blurb)
 
     ov_frame = QFrame()
     ov_frame.setObjectName("overridesFrame")
@@ -337,10 +412,15 @@ def build(dialog: "SettingsDialog") -> QWidget:
     ov_fl = QVBoxLayout(ov_frame)
     ov_fl.setContentsMargins(0, 0, 0, 0)
     ov_fl.setSpacing(0)
+
     user_overrides = dialog._config.get("overrides", [])
     if not isinstance(user_overrides, list):
         user_overrides = []
-    dialog._overrides_container = OverridesContainer(user_overrides)
+    disabled = dialog._config.get("disabled_default_overrides", [])
+    if not isinstance(disabled, list):
+        disabled = []
+
+    dialog._overrides_container = OverridesContainer(user_overrides, disabled)
     ov_fl.addWidget(dialog._overrides_container)
     cl.addWidget(ov_frame)
     cl.addStretch()

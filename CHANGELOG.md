@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] &mdash; 2026-05-23
+
+### Added
+- Per-override enable/disable toggle for the built-in defaults. Each
+  shipped default on the Overrides tab now carries a toggle switch
+  (grey off / green on), matching the system-command toggles. A
+  disabled default is filtered out of the rewrite pipeline entirely,
+  freeing both its before- and after-phrases for reuse. Disabled
+  defaults persist by pattern in a new `disabled_default_overrides`
+  key in `commands.json`; the default rules themselves are never
+  written, so the shipped list can grow across versions without stale
+  on-disk copies. Absent key = all defaults on, so pre-0.7.0 configs
+  keep working untouched.
+- "Open VC settings" is now a visible system command at the bottom of
+  the System Commands list (it existed before but was hidden). Like
+  other system commands its phrases are editable and it can be toggled
+  on/off, but not deleted. Its only default phrase is "open voice
+  commander settings" &mdash; "open settings" is intentionally left
+  free for your OS settings command.
+
+### Changed
+- Overrides tab redesigned to mirror the Commands tab: split into
+  "User Overrides" and "System Overrides" sections with their own
+  headers and a divider line between them, a separator line between
+  each row (none beneath the last), and a flush right-edge control
+  column &mdash; the user-row delete button was widened to match the
+  toggle width so the two columns line up.
+- Override precedence is now **user-first**: user rules run before the
+  built-in defaults, so a user override wins a same-word conflict with
+  a default (matching the tab's top-to-bottom layout). Previously
+  defaults ran first and could silently shadow a colliding user rule.
+  Users with no custom overrides are unaffected.
+- The Overrides tab's "Restore Defaults" now clears user rules **and**
+  re-enables every built-in default (a full shipped-state restore),
+  instead of only clearing user rules.
+- The Commands-tab action dropdown no longer responds to the scroll
+  wheel. Scrolling the page while the pointer is over a dropdown can
+  no longer silently change a command's action &mdash; click to open
+  the dropdown and pick.
+- The Save/Restore/Exit button bar lost its top divider line so it
+  blends into the framed dialog, mirroring how the tab row meets the
+  body at the top.
+- `ToggleSwitch` moved from the Commands tab module into
+  `core/settings/helpers.py`, shared by the Commands and Overrides
+  tabs.
+
+### Fixed
+- Log tab scrollbar now shows a visible, draggable handle instead of a
+  hollow outline. The read-only log view's inline stylesheet used a
+  bare declaration block, which bled its border onto the child
+  scrollbar and suppressed the handle fill; scoping it to a
+  `QTextEdit { ... }` selector restores the dialog-wide handle style.
+
+### Tests
+- New `tests/test_overrides_roundtrip.py`: the disabled-default
+  save/load round-trip, user-first precedence (a user rule beats a
+  colliding default), and the disable-frees-the-pattern scenario.
+  `pytest -q` = 30 passed.
+
 ## [0.6.0] &mdash; 2026-05-23
 
 ### Added

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] &mdash; 2026-05-25
+
+### Added
+- **New "Options" tab** (renamed from "About"; the first-time-user About
+  reference is now a subsection there) gathering three app settings:
+  - **Launch on login** &mdash; opt-in autostart. Off by default; turn it on
+    to have Voice Commander start with your session.
+  - **Enable notifications** &mdash; a single on/off toggle for desktop
+    notifications. The shutdown/restart/logout confirmation prompts always
+    appear regardless, so a destructive command is never confirmed blind.
+  - **Recognition strictness** &mdash; tune how closely speech must match a
+    command phrase (the global fuzzy-match threshold; default 0.75), with a
+    firm warning about the extremes and Restore Defaults to snap back.
+- **Application-menu launcher** &mdash; the installer now drops a `.desktop`
+  entry, so Voice Commander appears in your app menu (KDE Kickoff, etc.), not
+  only as the `voice-commander` terminal command.
+- **Duplicate-phrase guard** &mdash; Settings refuses to save when two
+  commands share an exact trigger phrase, naming the conflict so you can fix
+  it. (Only the first command in order would ever fire otherwise; a disabled
+  command still counts, since it still wins the match.)
+
+### Changed
+- **Autostart is now opt-in.** The installer no longer enables the service to
+  start at login &mdash; enable it yourself via Options &raquo; "Launch on
+  login." (Re-installing still starts/restarts the service for the current
+  session.)
+- **Consistent fixed-width layout across tabs.** The wake-words field, user
+  command rows, and Overrides rows now keep their size and center &mdash; like
+  the system command rows &mdash; instead of stretching to fill a wide or
+  maximized window. Section dividers are capped to the content width rather
+  than spanning the whole window.
+- The settings-window and application-menu icon is now the blue Voice
+  Commander icon.
+
 ## [0.8.0] &mdash; 2026-05-24
 
 ### Added

@@ -8,9 +8,10 @@ No cloud. No always-listening daemon phoning home. No telemetry.
 Speech recognition runs locally via [Vosk][vosk]; the wake-word
 detector ignores everything else until it hears its name.
 
-Voice Commander runs as a `systemd --user` service that starts at
-login, restarts on failure, and bounces cleanly with
-`systemctl --user restart voice-commander`.
+Voice Commander runs as a `systemd --user` service that restarts on
+failure and bounces cleanly with `systemctl --user restart
+voice-commander`. Starting automatically at login is opt-in &mdash;
+turn it on in Settings &raquo; Options (it's off by default).
 
 ## Requirements
 
@@ -43,10 +44,12 @@ What `install.sh` does:
    `~/.local/share/voice-commander/vosk-model/`.
 5. Installs the KWin window-placer helper script.
 6. Generates `~/.config/systemd/user/voice-commander.service`.
-7. Drops a `voice-commander` launcher at `~/.local/bin/`.
-8. Enables the service. If you're re-installing over a running
-   instance, it restarts the service so you immediately get the new
-   code.
+7. Drops a `voice-commander` launcher at `~/.local/bin/` and an
+   application-menu entry so it shows up in your app launcher.
+8. Starts the service (re-installing over a running instance restarts
+   it, so you get the new code immediately). Starting at login is
+   **not** enabled automatically &mdash; it's opt-in via
+   Settings &raquo; Options &raquo; "Launch on login."
 
 When it finishes, a tray icon appears in your system tray. Say your
 wake word (default: **"computer"**) followed by a command.
@@ -108,7 +111,9 @@ Right-click tray &rarr; Settings. Six tabs:
 1. **Commands** &mdash; the main UI. Add, edit, delete commands. Each
    one has a display name, an action, one or more trigger phrases,
    and any action-specific arguments. The wake word field sits at the
-   top of this tab.
+   top of this tab. Two commands can't share an exact trigger phrase
+   &mdash; Save refuses and names the conflict if they do (otherwise
+   only the first would ever fire).
 2. **Overrides** &mdash; pre-match string rewrites that fix consistent
    Vosk mishearings. See "Fixing mishearings" below.
 3. **Displays** &mdash; per-monitor aliases. So you can say "move to
@@ -120,7 +125,13 @@ Right-click tray &rarr; Settings. Six tabs:
 5. **Log** &mdash; live tail of the listener, colour-coded by
    category. Indispensable for figuring out what Vosk is *actually*
    hearing when a command doesn't fire.
-6. **About** &mdash; quick reference for first-time users.
+6. **Options** &mdash; app settings: **Launch on login** (opt-in
+   autostart), **Enable notifications** (a single on/off toggle for
+   desktop notifications &mdash; the shutdown/restart/logout
+   confirmation prompts always appear regardless), and **Recognition
+   strictness** (how closely speech must match a phrase, default 0.75).
+   The first-time-user **About** reference now lives here as a
+   subsection.
 
 The phrases that enter and leave open-mic mode are now the **Open mic**
 and **Close mic** system commands on the Commands tab (left-clicking the
@@ -129,7 +140,7 @@ tray icon toggles it too).
 The bottom bar has **Save**, **Restore Defaults**, and **Exit**.
 Save is dirty-tracked &mdash; it stays disabled until you've actually
 changed something. Restore Defaults is per-tab; it resets only the
-active tab and skips tabs that have no defaults (Model, Log, About).
+active tab and skips tabs that have no defaults (Model, Log).
 
 Most edits hot-reload without a service restart. Two settings need a
 restart to take effect: wake words and the Vosk model path (both are
@@ -367,10 +378,12 @@ the source exists and is usable.
 pytest -q
 ```
 
-The tests live at `tests/test_matcher.py`. They hook the matcher
-pipeline via `monkeypatch` and assert on what `_dispatch` would have
-been called with, so chain logic, slot extraction, and tail-rescore
-behaviour are observable without spinning up the GUI.
+The tests live under `tests/` (matcher pipeline, duplicate-phrase
+detection, config getters, and a Qt settings round-trip). The matcher
+tests hook the pipeline via `monkeypatch` and assert on what
+`_dispatch` would have been called with, so chain logic, slot
+extraction, and tail-rescore behaviour are observable without spinning
+up the GUI.
 
 To test code changes against your running setup, edit the repo and
 re-run `./install.sh`. The installer is idempotent, preserves your

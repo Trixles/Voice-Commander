@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QWidget,
 )
 
@@ -33,10 +33,18 @@ from core.overrides import (
     is_valid as _is_valid_override,
     sanitize as _sanitize_override,
 )
-from core.settings.helpers import ToggleSwitch, _h_rule, _section_label
+from core.settings.helpers import ToggleSwitch, _centered_rule, _h_rule, _section_label
 
 if TYPE_CHECKING:
     from core.settings.dialog import SettingsDialog
+
+
+# Fixed field width so override rows keep their size and center (like the
+# Commands tab) rather than stretching with the window. _ROW_CONTENT_W is the
+# total content width (pattern + arrow + replacement + 44px control + gaps),
+# used to center the per-row separator beneath the content.
+_FIELD_WIDTH = 200
+_ROW_CONTENT_W = 2 * _FIELD_WIDTH + 82
 
 
 # -- Override row + container -------------------------------------------------
@@ -108,8 +116,7 @@ class OverrideRow(QWidget):
 
         self._pattern_edit = QLineEdit(pattern)
         self._pattern_edit.setPlaceholderText("what Vosk heard")
-        self._pattern_edit.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                          QSizePolicy.Policy.Fixed)
+        self._pattern_edit.setFixedWidth(_FIELD_WIDTH)
         lh.addWidget(self._pattern_edit)
 
         # -- The bridge: arrow with no stretch, sits between halves ------
@@ -125,8 +132,7 @@ class OverrideRow(QWidget):
 
         self._replacement_edit = QLineEdit(replacement)
         self._replacement_edit.setPlaceholderText("what you meant (blank = delete)")
-        self._replacement_edit.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                              QSizePolicy.Policy.Fixed)
+        self._replacement_edit.setFixedWidth(_FIELD_WIDTH)
         rh.addWidget(self._replacement_edit)
 
         # Right-edge control. Default rows get the enable/disable toggle; user
@@ -154,18 +160,30 @@ class OverrideRow(QWidget):
             self._pattern_edit.setToolTip(tip)
             self._replacement_edit.setToolTip(tip)
 
-        # Equal stretch on left and right halves means their boundary IS the
-        # row center. Arrow has no stretch, so it stays parked at the boundary.
-        outer.addWidget(left_half, 1)
+        # Fixed-width halves + flanking stretches: the pattern->replacement block
+        # keeps its size and centers (matches the Commands tab) instead of
+        # stretching with the window. The arrow sits between the two fields.
+        outer.addStretch(1)
+        outer.addWidget(left_half)
         outer.addWidget(arrow)
-        outer.addWidget(right_half, 1)
+        outer.addWidget(right_half)
+        outer.addStretch(1)
 
         root.addWidget(content)
 
-        # Per-row separator line. Stored so the container can hide it on the
-        # last default row (the bottom-most row needs no line beneath it).
+        # Per-row separator, centered under the content (matches the Commands
+        # tab). Stored so the container can hide it on the last row. Fixed width
+        # (NOT setMaximumWidth -- an HLine gets starved to 0 by flanking
+        # stretches otherwise).
         self._bottom_rule = _h_rule()
-        root.addWidget(self._bottom_rule)
+        self._bottom_rule.setFixedWidth(_ROW_CONTENT_W)
+        rule_row = QHBoxLayout()
+        rule_row.setContentsMargins(0, 0, 0, 0)
+        rule_row.setSpacing(0)
+        rule_row.addStretch(1)
+        rule_row.addWidget(self._bottom_rule)
+        rule_row.addStretch(1)
+        root.addLayout(rule_row)
 
         # Wire dirty AFTER the initial setText / setChecked above (QLineEdit(
         # pattern) doesn't fire textChanged, and the toggle's setChecked must
@@ -289,13 +307,11 @@ class OverridesContainer(QWidget):
             self._append_user_row(OverrideRow(pattern, replacement, is_default=False))
 
         # ---- System Overrides section --------------------------------------
-        # Section divider. When there ARE user rows, the last user row's own
-        # separator line divides the two sections (matching the Commands tab),
-        # so this explicit rule hides to avoid a double line. When there are
-        # NO user rows, this rule is the divider so the sections are always
-        # visually separated. Visibility is managed by _update_section_rule().
-        self._section_rule = _h_rule()
-        layout.addWidget(self._section_rule)
+        # Real section divider, capped to the content width and centered (like
+        # the Commands tab) so it never runs wider than the rows it borders.
+        # _update_section_rule() hides the last user row's per-row line so this
+        # is the only thing between the two sections.
+        layout.addWidget(_centered_rule(_ROW_CONTENT_W))
 
         layout.addWidget(_section_label("System Overrides"))
         sys_blurb = QLabel(
@@ -329,11 +345,12 @@ class OverridesContainer(QWidget):
         self._update_section_rule()
 
     def _update_section_rule(self) -> None:
-        """Show the explicit User/System divider only when there are no user
-        rows. With user rows present, the last user row's own separator line
-        divides the sections (matching the Commands tab), so this rule hides
-        to avoid a double line."""
-        self._section_rule.setVisible(not self._user_rows)
+        """Hide the bottom-most user row's per-row separator: the capped section
+        divider beneath the User Overrides section handles the break, so a
+        per-row line there would double up. Re-run on add/remove. (Matches the
+        Commands tab.)"""
+        for i, row in enumerate(self._user_rows):
+            row._bottom_rule.setVisible(i < len(self._user_rows) - 1)
 
     def _append_user_row(self, row: OverrideRow) -> None:
         self._user_rows.append(row)

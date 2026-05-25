@@ -17,7 +17,7 @@ import sys
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter
-from PySide6.QtWidgets import QAbstractButton, QFrame, QLabel, QWidget
+from PySide6.QtWidgets import QAbstractButton, QFrame, QHBoxLayout, QLabel, QWidget
 
 from core.aliases import PINNED_SLOT as _PINNED_SLOT
 from core.paths import CONFIG_PATH
@@ -273,6 +273,23 @@ def _h_rule() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
+
+
+def _centered_rule(width: int) -> QWidget:
+    """An ``_h_rule()`` capped to ``width`` and centered via flanking stretches.
+    Use for SECTION dividers so a divider never runs wider than the (centered,
+    fixed-width) content it borders -- a full-width line over narrow centered
+    content looks wrong, especially when the window is maximized."""
+    wrapper = QWidget()
+    h = QHBoxLayout(wrapper)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(0)
+    rule = _h_rule()
+    rule.setFixedWidth(width)
+    h.addStretch(1)
+    h.addWidget(rule)
+    h.addStretch(1)
+    return wrapper
 
 
 # -- Toggle switch widget -----------------------------------------------------

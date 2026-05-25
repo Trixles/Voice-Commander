@@ -105,7 +105,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Voice Commander")
         self.setWindowIcon(QIcon(os.path.join(
             os.path.expanduser("~/.local/share/voice-commander/icons"),
-            "vc-listening.svg"
+            "vc-sleeping.svg"  # the blue icon (vc-listening is green); brand icon
         )))
         self.setMinimumWidth(540)
         self.setMinimumHeight(400)

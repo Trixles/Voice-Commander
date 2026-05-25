@@ -41,7 +41,7 @@ from core.settings.helpers import (
     APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY,
     _ACTION_LABELS, _CONFIRM_ACTIONS, _CONFIRM_NOTE, _HIDDEN_COMMANDS,
     _PINNED_SLOT_NAMES, _SELECTABLE_ACTIONS, ToggleSwitch,
-    _display_name_from_action, _display_name_from_slug, _h_rule,
+    _centered_rule, _display_name_from_action, _display_name_from_slug, _h_rule,
     _is_user_action, _load_desktop_apps, _section_label, _slug_from_name,
     _sort_key,
 )
@@ -60,6 +60,13 @@ _LOCKED_NAME_WIDTH = 180
 # Width of the "Options" expand button. Named so the locked-row separator can
 # size itself to the button cluster (see CommandRow._apply_rule_width).
 _OPTIONS_BTN_WIDTH = 82
+
+# Total content width of a user-command row: name (_LOCKED_NAME_WIDTH) + action
+# combo (160) + Options (_OPTIONS_BTN_WIDTH) + delete (44), with three 6px gaps.
+# Pinned + centered (like the locked rows) so user-row columns keep a fixed size
+# and never stretch with the window. The 160/44 mirror the action-combo
+# setFixedWidth and the delete setFixedSize below.
+_USER_ROW_CONTENT_W = _LOCKED_NAME_WIDTH + 6 + 160 + 6 + _OPTIONS_BTN_WIDTH + 6 + 44
 
 
 # -- Scroll-safe combo box ----------------------------------------------------
@@ -301,6 +308,10 @@ class CommandRow(QWidget):
             self._expand_btn.setFixedWidth(_OPTIONS_BTN_WIDTH)
             self._expand_btn.clicked.connect(self._toggle_expand)
 
+            # Fixed-width name + flanking stretches center the column set at a
+            # fixed total width, so user rows keep their size like locked rows.
+            self._name_edit.setFixedWidth(_LOCKED_NAME_WIDTH)
+            h.addStretch(1)
             h.addWidget(self._name_edit)
             h.addWidget(self._action_combo)
             h.addWidget(self._expand_btn)
@@ -327,6 +338,7 @@ class CommandRow(QWidget):
             self._delete_btn.setToolTip("Delete command")
             self._delete_btn.clicked.connect(self._on_delete)
             h.addWidget(self._delete_btn)
+            h.addStretch(1)  # trailing spacer mirrors the leading one -> centered
         outer.addWidget(header)
 
         # -- Body -------------------------------------------------------------
@@ -454,29 +466,24 @@ class CommandRow(QWidget):
         # (_expanded defaults to False in __init__.)
         self._body.setVisible(False)
         outer.addWidget(self._body)
-        # Per-row separator line. Stored so the container can hide it on the
-        # last system row (the bottom-most row needs no line beneath it).
+        # Per-row separator, centered under the row's content via flanking
+        # stretches (same structure for every row type, so behavior is uniform).
+        # Stored so the container can hide it on the last row. Collapsed,
+        # _apply_rule_width pins it to the row's content width (locked-row trio
+        # OR user-row column set) via setFixedWidth -- NOT setMaximumWidth, which
+        # lets the flanking stretches starve an HLine (sizeHint width -1) down to
+        # zero. Expanded, the fixed width is released and it spans the full body.
         self._bottom_rule = _h_rule()
-        if self._is_slot_pinned or self._is_system_action:
-            # Locked rows: the separator hugs the centered button cluster when
-            # collapsed and widens to the full body when Options is expanded.
-            # Centering is structural (flanking stretches, no pixel math); the
-            # collapsed width is pinned via setFixedWidth in _apply_rule_width
-            # -- NOT setMaximumWidth, which lets the flanking stretches starve
-            # an HLine (sizeHint width -1) down to zero and vanish.
-            self._bottom_rule.setSizePolicy(QSizePolicy.Policy.Expanding,
-                                            QSizePolicy.Policy.Fixed)
-            self._rule_row = QHBoxLayout()
-            self._rule_row.setContentsMargins(0, 0, 0, 0)
-            self._rule_row.setSpacing(0)
-            self._rule_row.addStretch(0)            # 0: left spacer
-            self._rule_row.addWidget(self._bottom_rule)  # 1: the line
-            self._rule_row.addStretch(0)            # 2: right spacer
-            outer.addLayout(self._rule_row)
-            self._apply_rule_width()
-        else:
-            self._rule_row = None
-            outer.addWidget(self._bottom_rule)
+        self._bottom_rule.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                        QSizePolicy.Policy.Fixed)
+        self._rule_row = QHBoxLayout()
+        self._rule_row.setContentsMargins(0, 0, 0, 0)
+        self._rule_row.setSpacing(0)
+        self._rule_row.addStretch(0)            # 0: left spacer
+        self._rule_row.addWidget(self._bottom_rule)  # 1: the line
+        self._rule_row.addStretch(0)            # 2: right spacer
+        outer.addLayout(self._rule_row)
+        self._apply_rule_width()
 
     def _populate(self, cmd: dict) -> None:
         self._populating = True
@@ -587,8 +594,9 @@ class CommandRow(QWidget):
         self._apply_rule_width()
 
     def _apply_rule_width(self) -> None:
-        """Locked rows only: size the per-row separator to the centered button
-        cluster when collapsed, and to the full body width when expanded.
+        """Size the per-row separator to the row's centered content (the
+        locked-row trio OR the user-row column set) when collapsed, and to the
+        full body width when expanded.
 
         Collapsed width is pinned with setFixedWidth (min == max == trio width),
         NOT setMaximumWidth. An HLine reports a sizeHint width of -1, so under a
@@ -611,10 +619,13 @@ class CommandRow(QWidget):
             self._rule_row.setStretch(2, 0)
         else:
             spacing = 6  # matches the header layout's setSpacing(6)
-            toggle_w = (self._enable_toggle.sizeHint().width()
-                        if self._enable_toggle is not None else 44)
-            trio_w = _LOCKED_NAME_WIDTH + spacing + _OPTIONS_BTN_WIDTH + spacing + toggle_w
-            self._bottom_rule.setFixedWidth(trio_w)
+            if self._is_slot_pinned or self._is_system_action:
+                toggle_w = (self._enable_toggle.sizeHint().width()
+                            if self._enable_toggle is not None else 44)
+                content_w = _LOCKED_NAME_WIDTH + spacing + _OPTIONS_BTN_WIDTH + spacing + toggle_w
+            else:
+                content_w = _USER_ROW_CONTENT_W
+            self._bottom_rule.setFixedWidth(content_w)
             self._rule_row.setStretch(0, 1)
             self._rule_row.setStretch(1, 0)
             self._rule_row.setStretch(2, 1)
@@ -775,9 +786,14 @@ class CommandsContainer(QWidget):
         self._user_rows_layout.setSpacing(0)
         layout.addLayout(self._user_rows_layout)
 
+        # Section divider between User and System -- a real section break (like
+        # the Wake Words / commands divider), capped to the content width and
+        # centered so it never runs wider than the rows it borders.
+        # _refresh_user_separators() hides the last user row's per-row line so
+        # this is the only thing between the two sections.
+        layout.addWidget(_centered_rule(_USER_ROW_CONTENT_W))
+
         # ---- System Commands section ---------------------------------------
-        # The last user row's own separator line divides the two sections, the
-        # same way the Wake Words / Commands sections are divided by a line.
         layout.addWidget(_section_label("System Commands"))
         sys_blurb = QLabel(
             "Built-in actions (volume, media, window, power). Their names and "
@@ -823,6 +839,19 @@ class CommandsContainer(QWidget):
         # it gets no separator line beneath it.
         if system_rows:
             system_rows[-1]._bottom_rule.setVisible(False)
+        self._refresh_user_separators()
+
+    def _refresh_user_separators(self) -> None:
+        """Hide the bottom-most user row's per-row separator: the full-width
+        divider beneath the User Commands section handles the break, so a
+        centered per-row line there would just double up. Iterates the layout in
+        visual order (new rows insert at the top), so re-running after any
+        add/remove keeps the correct row's line hidden."""
+        n = self._user_rows_layout.count()
+        for i in range(n):
+            w = self._user_rows_layout.itemAt(i).widget()
+            if isinstance(w, CommandRow):
+                w._bottom_rule.setVisible(i < n - 1)
 
     @staticmethod
     def _is_system_row(row: CommandRow) -> bool:
@@ -845,6 +874,7 @@ class CommandsContainer(QWidget):
         self._rows.append(row)
         # New user commands go to the top of the User Commands section.
         self._user_rows_layout.insertWidget(0, row)
+        self._refresh_user_separators()
         row.dirtied.connect(self.dirtied)
         # Adding a row is itself a dirty change, even before the user types.
         self.dirtied.emit()
@@ -856,6 +886,7 @@ class CommandsContainer(QWidget):
             self._rows.remove(row)
             self._user_rows_layout.removeWidget(row)
             row.deleteLater()
+            self._refresh_user_separators()
             self.dirtied.emit()
         self._new_rows = [r for r in self._new_rows if r is not row]
 
@@ -930,13 +961,18 @@ def build(dialog: "SettingsDialog") -> QWidget:
         dialog._wake_edit.setText(dialog._config.get("wake_word", "computer"))
     dialog._wake_edit.setPlaceholderText("computer")
     dialog._wake_edit.textChanged.connect(dialog._check_restart_needed)
+    # Fixed width + flanking stretches: the field keeps its size and centers,
+    # matching the command rows below instead of stretching with the window.
+    dialog._wake_edit.setFixedWidth(_USER_ROW_CONTENT_W)
+    wr.addStretch(1)
     wr.addWidget(dialog._wake_edit)
+    wr.addStretch(1)
     cl.addWidget(wake_row)
 
     # Separator between Wake Words and the command sections. The User Commands
     # and System Commands section headers (and the line dividing them) live
     # inside CommandsContainer.
-    cl.addWidget(_h_rule())
+    cl.addWidget(_centered_rule(_USER_ROW_CONTENT_W))
 
     cmd_frame = QFrame()
     cmd_frame.setObjectName("cmdFrame")

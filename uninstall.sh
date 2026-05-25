@@ -42,6 +42,7 @@ ok "Service removed."
 
 info "Removing launcher..."
 rm -f "${BIN_DIR}/${APP_NAME}"
+rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/${APP_NAME}.desktop"
 ok "Launcher removed."
 
 info "Removing application data..."

@@ -191,6 +191,24 @@ _STYLESHEET_TEMPLATE = """
     QListView::item:hover {
         background-color: #383850;
     }
+    QSlider::groove:horizontal {
+        height: 6px;
+        background: #45475a;
+        border-radius: 3px;
+    }
+    QSlider::sub-page:horizontal {
+        background: #89b4fa;
+        border-radius: 3px;
+    }
+    QSlider::handle:horizontal {
+        background: #cdd6f4;
+        width: 16px;
+        margin: -5px 0;
+        border-radius: 8px;
+    }
+    QSlider::handle:horizontal:hover {
+        background: #b4befe;
+    }
 """
 
 # The window background is the only value that differs between the translucent

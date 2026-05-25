@@ -89,7 +89,7 @@ from core.settings.tabs.overrides_tab import build as build_overrides_tab
 from core.settings.tabs.displays_tab import MonitorRow, build as build_displays_tab
 from core.settings.tabs.model_tab import build as build_model_tab
 from core.settings.tabs.log_tab import build as build_log_tab, _colorize_log_line
-from core.settings.tabs.about_tab import build as build_about_tab
+from core.settings.tabs.options_tab import build as build_options_tab
 from core.settings.helpers import (
     _HIDDEN_COMMANDS,
     VOSK_MODELS_DIR,
@@ -136,6 +136,10 @@ class SettingsDialog(QDialog):
         except ValueError:
             self._orig_model_path = self._config.get("vosk_model", "")
 
+        self._orig_notifications = self._config.get("notifications", True)
+        self._orig_match_threshold = self._config.get("match_threshold", 0.75)
+        self._orig_autostart = self._autostart_is_enabled()
+
         self._build_ui()
         self._apply_stylesheet()
 
@@ -150,13 +154,13 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._build_displays_tab(), "Displays")
         self._tabs.addTab(self._build_model_tab(), "Model")
         self._tabs.addTab(self._build_log_tab(), "Log")
-        self._tabs.addTab(self._build_about_tab(), "About")
+        self._tabs.addTab(self._build_options_tab(), "Options")
         self._tabs.tabBar().setExpanding(True)
         self._tabs.tabBar().setMinimumWidth(540)
         root.addWidget(self._tabs)
 
         # Map tab title -> per-tab reset handler. Tabs absent from this map
-        # (Model, Log, About) have no per-tab defaults and disable the
+        # (Model, Log) have no per-tab defaults and disable the
         # bottom-bar Restore Defaults button when selected. Keyed by tab
         # TITLE rather than index so reordering tabs doesn't silently rewire.
         self._tab_reset_map: dict = {
@@ -166,6 +170,8 @@ class SettingsDialog(QDialog):
                           "Remove all user-added override rules and re-enable every built-in default."),
             "Displays":  (self._reset_displays,
                           "Reset every monitor's aliases to the shipped defaults (Display 1, Display 2, ...)."),
+            "Options":   (self._reset_options,
+                          "Restore Options to defaults: notifications on, recognition strictness 0.75, and launch on login off."),
         }
 
         btn_bar = QWidget()
@@ -203,6 +209,10 @@ class SettingsDialog(QDialog):
         self._overrides_container.dirtied.connect(self._mark_dirty)
         for mrow in self._monitor_rows:
             mrow.dirtied.connect(self._mark_dirty)
+        self._notifications_toggle.toggled.connect(self._mark_dirty)
+        self._strictness_slider.valueChanged.connect(self._mark_dirty)
+        if self._orig_autostart is not None:
+            self._autostart_toggle.toggled.connect(self._mark_dirty)
         # Model picker dirties via _browse_vosk_model -> _check_restart_needed,
         # which we extend below to also call _mark_dirty.
 
@@ -255,8 +265,8 @@ class SettingsDialog(QDialog):
         self._mark_dirty()
         print(f"[settings] Vosk model selected: {chosen}")
 
-    def _build_about_tab(self) -> QWidget:
-        return build_about_tab(self)
+    def _build_options_tab(self) -> QWidget:
+        return build_options_tab(self)
 
     def _build_commands_tab(self) -> QWidget:
         return build_commands_tab(self)
@@ -352,6 +362,44 @@ class SettingsDialog(QDialog):
         box.setEscapeButton(ok)
         box.exec()
 
+    def _autostart_is_enabled(self) -> bool | None:
+        """Return True/False from `systemctl --user is-enabled` for the service,
+        or None if systemctl or the unit isn't available (e.g. running from
+        source). Read-only; called once at dialog open."""
+        try:
+            r = run_capture(
+                ["systemctl", "--user", "is-enabled", "voice-commander.service"],
+                timeout=5,
+            )
+        except Exception as e:
+            print(f"[settings] autostart is-enabled check failed: {e}")
+            return None
+        out = (r.stdout or "").strip()
+        if out == "enabled":
+            return True
+        if out == "disabled":
+            return False
+        return None  # not-found / static / unexpected -> treat as unavailable
+
+    def _apply_autostart(self, enable: bool) -> bool:
+        """`systemctl --user enable|disable` the service. Returns True on
+        success. Captures + logs output (does not raise)."""
+        verb = "enable" if enable else "disable"
+        try:
+            r = run_capture(
+                ["systemctl", "--user", verb, "voice-commander.service"],
+                timeout=10,
+            )
+        except Exception as e:
+            print(f"[settings] autostart {verb} failed to run: {e}")
+            return False
+        if r.returncode != 0:
+            print(f"[settings] autostart {verb} failed (rc={r.returncode}): "
+                  f"{(r.stderr or '').strip()}")
+            return False
+        print(f"[settings] autostart: {verb}d voice-commander.service")
+        return True
+
     def _save(self) -> None:
         old_wake_words  = self._config.get("wake_words", [self._config.get("wake_word", "computer")])
 
@@ -414,6 +462,10 @@ class SettingsDialog(QDialog):
         if self._selected_model_path:
             new_config["vosk_model"] = self._selected_model_path
 
+        # Options tab: notifications + recognition strictness are config-backed.
+        new_config["notifications"] = self._notifications_toggle.isChecked()
+        new_config["match_threshold"] = round(self._strictness_slider.value() / 100.0, 2)
+
         try:
             _write_config(new_config)
         except Exception as e:
@@ -424,6 +476,14 @@ class SettingsDialog(QDialog):
         # works correctly (hidden-command re-inject reads from self._config).
         self._config = new_config
         self._mark_clean()
+
+        # Launch-on-login is external systemd state, not config -- apply it here,
+        # only when its state is known and actually changed. The helper captures
+        # and logs systemctl output.
+        if self._orig_autostart is not None:
+            desired = self._autostart_toggle.isChecked()
+            if desired != self._orig_autostart and self._apply_autostart(desired):
+                self._orig_autostart = desired
 
         new_wake_words = new_config.get("wake_words", [])
         needs_restart  = (sorted(old_wake_words) != sorted(new_wake_words) or
@@ -493,6 +553,52 @@ class SettingsDialog(QDialog):
             "Defaults restored",
             "Commands have been restored to defaults. The settings window will close; "
             "reopen it to see the new commands.",
+        )
+        self.accept()
+
+    def _reset_options(self) -> None:
+        """
+        Confirm, then restore the Options tab to shipped defaults: notifications
+        ON, recognition strictness 0.75, and launch-on-login OFF. Writes config
+        and runs `systemctl --user disable` immediately (this reset is NOT
+        Save-gated -- it writes and closes, like the other per-tab resets).
+        """
+        reply = QMessageBox.question(
+            self,
+            "Restore Default Options?",
+            "This will turn notifications ON, reset recognition strictness to "
+            "0.75, and turn OFF launch on login.\n\n"
+            "This cannot be undone. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                data = json.load(f)
+            data["notifications"] = True
+            data["match_threshold"] = 0.75
+            _write_config(data)
+            import core.commands as _cmds
+            _cmds.load_config()
+            # Launch-on-login default is OFF. It's external systemd state, so we
+            # apply it here rather than writing it to config.
+            if self._orig_autostart is not None:
+                self._apply_autostart(False)
+            print("[settings] Options reset to defaults.")
+        except Exception as e:
+            print(f"[settings] Options reset failed: {e}")
+            QMessageBox.warning(self, "Reset failed", f"Could not reset options:\n{e}")
+            return
+
+        QMessageBox.information(
+            self,
+            "Defaults restored",
+            "Options restored to defaults (notifications on, strictness 0.75, "
+            "launch on login off). The settings window will close; reopen it to "
+            "see the changes.",
         )
         self.accept()
 

@@ -67,8 +67,13 @@ def open_file(path: str, gui_env: dict, context=None) -> None:
         return
     if not os.path.exists(path):
         print(f"[apps] open_file: path does not exist: {path}")
-        notify("File not found", f"Path does not exist:\n{path}",
-               timeout_ms=3000, gui_env=gui_env)
+        # Local import: core.commands imports this module, so a top-level
+        # import would be circular. notifications_enabled() reads the Options
+        # toggle; this error toast is general feedback and respects it.
+        from core.commands import notifications_enabled
+        if notifications_enabled():
+            notify("File not found", f"Path does not exist:\n{path}",
+                   timeout_ms=3000, gui_env=gui_env)
         return
     run_bg(["xdg-open", path], env=gui_env, detach=True)
     if context:

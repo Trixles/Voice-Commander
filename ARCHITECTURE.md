@@ -505,3 +505,62 @@ companion — keep them in sync.
   reports 0, skips every monitor. Add a PNP-ID lookup table —
   Display Product Name shown verbatim per Tyler's call. Add Qt
   imports to `core/edid.py`.
+
+### Recognition strictness is a config-driven global match threshold
+- **What (0.9.0):** The fuzzy-match threshold `DEFAULT_THRESHOLD = 0.75`
+  (commands.py) is exposed on the Options tab as "Recognition strictness"
+  (a full 0.00–1.00 slider). `get_match_threshold()` returns
+  `_config.get("match_threshold", DEFAULT_THRESHOLD)`. `_score_segment` uses
+  `cmd.get("threshold", get_match_threshold())` so a per-command `threshold`
+  still overrides the global; `_detect_on_monitor` compares against
+  `get_match_threshold()` too. Config hot-reloads, so a change takes effect
+  without a restart. Default config carries `match_threshold: 0.75`.
+- **Why:** Users wanted to tune sensitivity. Full range + a firm in-UI warning
+  (Tyler's call: trust the user, no clamp) beats a hidden/bounded knob.
+- **Don't:** Re-hardcode `DEFAULT_THRESHOLD` at the call sites (read the
+  getter). Clamp the slider to a "safe" sub-range. Drop the per-command override.
+
+### Notifications: a blanket toggle gates general notifications; confirm prompts always fire
+- **What (0.9.0):** Config `notifications` (bool, default true) →
+  `notifications_enabled()`. `notify()` itself stays pure; gating is at the CALL
+  SITES. General feedback (no-match, mic toggles, "Listening…", command
+  results, `_notify_disabled`, file-not-found) is suppressed when off — in
+  listener.py via the `_notify_general()` wrapper, in commands.py via inline
+  `if notifications_enabled():`, in actions/apps.py via a function-local import
+  (avoids the commands→apps cycle). The shutdown/restart/logout CONFIRMATION
+  prompts (and their cancel/timeout notices) call `_notify` DIRECTLY and ALWAYS
+  fire — user protection: never confirm a destructive action blind.
+- **Why:** One simple user toggle (Tyler: "off means off, they'll figure it
+  out") without nuking the safety-critical confirm UI.
+- **Don't:** Gate the confirm-flow calls. Read config inside notify.py (keep it
+  pure; gate at call sites). Re-introduce a per-notification granular UI.
+
+### Launch-on-login is opt-in external systemd state (not config)
+- **What (0.9.0):** Autostart = whether `voice-commander.service` is
+  `systemctl --user enable`d. It is OPT-IN: install.sh's `start_service` starts
+  (or restarts) the unit but does NOT `enable` it. The Options-tab "Launch on
+  login" toggle reads real state via `_autostart_is_enabled()` (is-enabled →
+  True/False/None) and APPLIES on Save via `_apply_autostart()` (enable/disable,
+  output captured). None (no systemctl/unit, e.g. running from source) → toggle
+  disabled with a note. Autostart is NEVER written to config — external system
+  state, handled separately in `_save`.
+- **Why:** Power users hate forced autostart; default-off respects that. On-Save
+  keeps one mental model (consistent with every other control).
+- **Don't:** `systemctl enable` in install.sh. Store autostart in commands.json.
+  Apply it instantly on toggle (it waits for Save).
+
+### Settings "Options" tab (renamed from "About" in 0.9.0)
+- **What (0.9.0):** `core/settings/tabs/options_tab.py` (was about_tab.py) holds
+  the Launch-on-login, Enable-notifications, and Recognition-strictness controls,
+  then the old About blurb + version footer as a subsection. Registered in
+  dialog.py as `_build_options_tab` / `addTab(..., "Options")` and in
+  `_tab_reset_map` → `_reset_options`, which (like every per-tab reset) is
+  IMMEDIATE: confirm → write defaults → reload → close. Reset defaults:
+  notifications on, strictness 0.75, AND launch-on-login OFF (an immediate
+  `systemctl disable`, since reset is not Save-gated). install.sh ships an
+  app-menu `.desktop` (Icon = `vc-listening.svg`, the same icon the settings
+  window already uses).
+- **Why:** A real home for app-wide options; About demoted to a subsection
+  (Tyler rewrites the blurb later).
+- **Don't:** Assume Restore Defaults is Save-gated (it writes + closes
+  immediately). Forget that the Options reset also disables autostart.

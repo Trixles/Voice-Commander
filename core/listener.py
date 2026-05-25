@@ -40,6 +40,16 @@ import core.commands as commands
 import core.overrides as overrides
 
 
+def _notify_general(*args, **kwargs) -> None:
+    """Desktop notification for GENERAL feedback (no-match, mic toggles,
+    "Listening...", etc.). Suppressed when the user turns notifications off on
+    the Options tab. The shutdown/restart/logout CONFIRMATION prompts call
+    ``_notify`` directly so they ALWAYS fire regardless of this toggle (user
+    protection -- never let someone confirm a destructive action blind)."""
+    if commands.notifications_enabled():
+        _notify(*args, **kwargs)
+
+
 # -- Built-in phrase sets -----------------------------------------------------
 # Open/close mic phrase defaults live in core/commands.py alongside the other
 # shipped defaults (see DEFAULT_OPEN_MIC_PHRASES / DEFAULT_CLOSE_MIC_PHRASES).
@@ -239,7 +249,7 @@ def run_listener(
         if context.state == State.LISTENING:
             if now - command_window_start > command_window:
                 print("[listener] Command window expired, back to sleep.")
-                _notify("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
+                _notify_general("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
                 LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match (window expired)")
                 set_state(State.SLEEPING)
 
@@ -272,12 +282,12 @@ def run_listener(
                     if cmd == "toggle_open_mic":
                         if context.state == State.OPEN_MIC:
                             set_state(State.SLEEPING)
-                            _notify("Open mic disabled", "Waiting for wake word.", gui_env=gui_env)
+                            _notify_general("Open mic disabled", "Waiting for wake word.", gui_env=gui_env)
                             print("[listener] Open mic toggled off via tray.")
                             LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Open mic disabled")
                         elif context.state == State.SLEEPING:
                             set_state(State.OPEN_MIC)
-                            _notify("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
+                            _notify_general("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
                             print("[listener] Open mic toggled on via tray.")
                             LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Open mic enabled")
                     elif cmd == "quit":
@@ -313,7 +323,7 @@ def run_listener(
 
             print("[listener] Wake word detected.")
             LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
-            _notify("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
+            _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
             if commands.try_match(text, gui_env, context):
                 if context.pending_confirm:
                     pre_confirm_state = State.SLEEPING
@@ -339,7 +349,7 @@ def run_listener(
         elif context.state == State.LISTENING:
             if _is_open_mic_command(text):
                 set_state(State.OPEN_MIC)
-                _notify("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
+                _notify_general("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
                 print("[listener] -> OPEN_MIC")
                 LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Open mic enabled")
                 continue
@@ -362,7 +372,7 @@ def run_listener(
                     set_state(State.SLEEPING)
             else:
                 print("[listener] No match.")
-                _notify("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
+                _notify_general("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
                 LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match")
 
         elif context.state == State.CONFIRMING:
@@ -384,7 +394,7 @@ def run_listener(
         elif context.state == State.OPEN_MIC:
             if _is_close_mic_command(text):
                 set_state(State.SLEEPING)
-                _notify("Open mic disabled", "Waiting for wake word.", gui_env=gui_env)
+                _notify_general("Open mic disabled", "Waiting for wake word.", gui_env=gui_env)
                 print("[listener] -> SLEEPING")
                 LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Open mic disabled")
                 continue

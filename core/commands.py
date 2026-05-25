@@ -452,6 +452,20 @@ def get_command_window() -> int:
     return _config.get("command_window", 5)
 
 
+def get_match_threshold() -> float:
+    """Global fuzzy-match threshold ("recognition strictness"), user-adjustable
+    on the Options tab. Falls back to DEFAULT_THRESHOLD when unset. Per-command
+    `threshold` keys still override this in _score_segment."""
+    return _config.get("match_threshold", DEFAULT_THRESHOLD)
+
+
+def notifications_enabled() -> bool:
+    """Whether general desktop notifications are on (Options tab blanket toggle).
+    The shutdown/restart/logout CONFIRMATION prompts ignore this and always fire
+    -- that gating lives at the call sites in core/listener.py."""
+    return _config.get("notifications", True)
+
+
 def _mic_phrases(action: str, legacy_key: str, defaults: list[str]) -> set[str]:
     """Resolve the active phrase set for a mic toggle, in priority order:
 
@@ -564,7 +578,7 @@ def _detect_on_monitor(heard: str) -> str | None:
             if score > best_score:
                 best_score = score
                 best_output = output_name
-    if best_output is not None and best_score >= DEFAULT_THRESHOLD:
+    if best_output is not None and best_score >= get_match_threshold():
         print(f"[commands] 'on' target: '{candidate}' -> '{best_output}' (score {best_score:.2f})")
         return best_output
     print(f"[commands] 'on' target: '{candidate}' -- no alias match above threshold (best {best_score:.2f})")
@@ -755,7 +769,7 @@ def _score_segment(
     for cmd in _commands:
         if cmd.get("action") in _MIC_ACTIONS:
             continue  # listener-handled state transition; see _MIC_ACTIONS
-        threshold = cmd.get("threshold", DEFAULT_THRESHOLD)
+        threshold = cmd.get("threshold", get_match_threshold())
         for phrase in cmd["phrases"]:
             if _has_slots(phrase):
                 raw_slots = _extract_slots(heard, phrase)
@@ -968,7 +982,8 @@ def _dispatch(cmd: dict, resolved_args: dict, gui_env: dict, context) -> None:
         display = cmd.get("display_name") or cmd.get("name", action_name)
         msg = f"'{display}' command is missing required setting(s): {', '.join(missing)}"
         print(f"[commands] {msg}")
-        _notify("Command not configured", msg, gui_env=gui_env)
+        if notifications_enabled():
+            _notify("Command not configured", msg, gui_env=gui_env)
         LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! {msg}")
         return
 
@@ -980,7 +995,8 @@ def _dispatch(cmd: dict, resolved_args: dict, gui_env: dict, context) -> None:
 
     summary = _build_notification(action_name, cmd, merged, gui_env)
     _last_fired[cmd["name"]] = time.time()
-    _notify(summary, gui_env=gui_env)
+    if notifications_enabled():
+        _notify(summary, gui_env=gui_env)
 
     LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  >> {summary}")
 
@@ -1014,7 +1030,8 @@ def _notify_disabled(cmd: dict, gui_env: dict) -> None:
     msg = f"{display} is disabled in Settings"
     print(f"[commands] {msg}")
     LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! {msg}")
-    _notify(msg, gui_env=gui_env)
+    if notifications_enabled():
+        _notify(msg, gui_env=gui_env)
 
 
 # -- Main entry point ---------------------------------------------------------
@@ -1199,6 +1216,8 @@ if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "--emit-defaults":
         config = {
             "command_window": 5,
+            "match_threshold": DEFAULT_THRESHOLD,
+            "notifications": True,
             "vosk_model": _DEFAULT_VOSK_MODEL_NAME,
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.

@@ -334,14 +334,37 @@ EOF
     esac
 }
 
-# -- Enable + start ----------------------------------------------------------
-enable_service() {
-    # `enable` is idempotent and ensures the service starts at next login.
-    # On re-install over a running instance, `enable --now` would NOT restart
-    # the existing process -- it would happily leave it running on stale code.
-    # So we enable unconditionally, then branch: restart if active, start if not.
-    systemctl --user enable "${APP_NAME}.service"
+# -- Desktop entry (app-menu launcher) ---------------------------------------
+install_desktop_file() {
+    local apps_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    local desktop_file="${apps_dir}/${APP_NAME}.desktop"
+    info "Installing app-menu entry to ${desktop_file}..."
+    mkdir -p "${apps_dir}"
+    cat > "${desktop_file}" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Voice Commander
+Comment=Hands-free voice control for your desktop
+Exec=${BIN_DIR}/${APP_NAME}
+Icon=${ICONS_DIR}/vc-listening.svg
+Terminal=false
+Categories=Utility;AudioVideo;
+StartupNotify=false
+EOF
+    # Refresh the menu cache so the entry appears without a re-login.
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "${apps_dir}" >/dev/null 2>&1 || true
+    fi
+    ok "App-menu entry installed."
+}
 
+# -- Start (autostart is opt-in; the installer does NOT enable) --------------
+start_service() {
+    # 0.9.0: autostart is OPT-IN. The installer no longer enables the service at
+    # login -- that's the user's choice via Settings -> Options ("Launch on
+    # login") or `systemctl --user enable voice-commander.service`. We only
+    # start it now so it's usable immediately. On re-install over a running
+    # instance, restart to pick up new code.
     if systemctl --user is-active --quiet "${APP_NAME}.service"; then
         info "Service is already running -- restarting to pick up new code..."
         systemctl --user restart "${APP_NAME}.service"
@@ -371,7 +394,8 @@ main() {
     install_config
     install_service
     install_launcher
-    enable_service
+    install_desktop_file
+    start_service
 
     echo
     printf "${c_green}${c_bold}Voice Commander ${VC_VERSION} is installed and running.${c_reset}\n"
@@ -380,6 +404,7 @@ main() {
     printf "View logs:      ${c_bold}journalctl --user -u voice-commander -f${c_reset}\n"
     printf "Restart:        ${c_bold}systemctl --user restart voice-commander${c_reset}\n"
     printf "Open settings:  right-click the tray icon, or say your wake word followed by \"open settings\"\n"
+    printf "Launch on login: ${c_bold}off by default${c_reset} -- turn it on in Settings -> Options\n"
     printf "Uninstall:      ${c_bold}./uninstall.sh${c_reset}\n"
     echo
 }

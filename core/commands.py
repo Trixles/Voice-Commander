@@ -603,6 +603,118 @@ def _wm_class_hint(cmd: dict) -> str:
     return os.path.basename(raw.split()[0]).lower()
 
 
+# -- Duplicate-phrase detection (settings-time validation) --------------------
+
+def _oxford_join(names: list[str]) -> str:
+    """Join names as 'A and B' (two) or 'A, B, and C' (three or more)."""
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return ", ".join(names[:-1]) + f", and {names[-1]}"
+
+
+def find_duplicate_phrases(commands: list[dict]) -> list[dict]:
+    """
+    Find command phrases that collide exactly across two or more commands.
+
+    A "collision" is the same phrase (case-insensitive, whitespace-trimmed)
+    appearing on two or more distinct commands. This is the detection behind
+    the settings Save block: two commands can't share a phrase, because only
+    the first in commands.json order would ever fire (see _score_segment's
+    strict ``>`` tie-break) -- the rest are silently shadowed.
+
+    Scope is deliberately aligned with the runtime matcher:
+      - EXACT match only. Fuzzy near-collisions ("volume up" vs "volume app")
+        are NOT detected here -- that's a different, much harder problem.
+      - Slot-bearing phrases are skipped (``_has_slots``): slot templates never
+        match by exact string equality at runtime, so they can't "exactly"
+        collide.
+      - Blank phrases are ignored.
+      - A phrase listed twice within ONE command is de-duped per command (not a
+        cross-command collision).
+      - DISABLED commands are INCLUDED: a disabled command still wins the match
+        (it fires a "disabled" notice and shadows the enabled twin -- see
+        _score_segment), so a disabled duplicate is just as broken.
+
+    Returns one entry per colliding phrase, in first-appearance order::
+
+        {"phrase": <first raw spelling seen>,
+         "commands": [{"name": <display name>, "enabled": <bool>}, ...]}
+
+    Commands within an entry are in collected/file order (which is the runtime
+    match order). Only phrases shared by >= 2 commands are returned.
+    """
+    groups: dict[str, list[dict]] = {}
+    display_phrase: dict[str, str] = {}
+    for cmd in commands:
+        # collect() always populates display_name for collidable rows; the slug
+        # title-case is a Qt-free fallback so commands.py never has to import
+        # the PySide6-bound display helpers (keeps --emit-defaults working).
+        name = cmd.get("display_name") or cmd.get("name", "").replace("_", " ").title()
+        enabled = cmd.get("enabled", True)
+        seen_in_cmd: set[str] = set()
+        for phrase in cmd.get("phrases", []):
+            if _has_slots(phrase):
+                continue
+            norm = phrase.strip().lower()
+            if not norm or norm in seen_in_cmd:
+                continue
+            seen_in_cmd.add(norm)
+            display_phrase.setdefault(norm, phrase.strip())
+            groups.setdefault(norm, []).append({"name": name, "enabled": enabled})
+
+    return [
+        {"phrase": display_phrase[norm], "commands": members}
+        for norm, members in groups.items()
+        if len(members) >= 2
+    ]
+
+
+def _build_block_message(collisions: list[dict]) -> str:
+    """
+    Build the user-facing text for the duplicate-phrase Save block.
+
+    Pure string assembly (no Qt) so it is unit-testable. ``collisions`` is the
+    output of find_duplicate_phrases(). Disabled commands are annotated so the
+    user understands why a command they switched off still blocks the save.
+    """
+    def _name(member: dict) -> str:
+        label = f"«{member['name']}»"
+        return f"{label} (disabled)" if not member.get("enabled", True) else label
+
+    def _has_disabled(members: list[dict]) -> bool:
+        return any(not m.get("enabled", True) for m in members)
+
+    if len(collisions) == 1:
+        c = collisions[0]
+        joined = _oxford_join([_name(m) for m in c["commands"]])
+        msg = (
+            f'Can\'t save — two commands share a phrase.\n\n'
+            f'"{c["phrase"]}" is set on {joined}. A phrase can only belong to '
+            f'one command — otherwise only the first one would ever respond.\n\n'
+            f'Remove it from one of them, then save.'
+        )
+        if _has_disabled(c["commands"]):
+            msg += (
+                '\n\nNote: a disabled command still claims its phrases — '
+                'disabling it doesn\'t free them up.'
+            )
+        return msg
+
+    CAP = 6
+    lines = [
+        'Can\'t save — these phrases are each used by more than one command. '
+        'Every phrase can belong to only one. Fix them, then save:',
+        '',
+    ]
+    for c in collisions[:CAP]:
+        names = ", ".join(_name(m) for m in c["commands"])
+        lines.append(f'• "{c["phrase"]}" — {names}')
+    extra = len(collisions) - CAP
+    if extra > 0:
+        lines.append(f'…and {extra} more.')
+    return "\n".join(lines)
+
+
 # -- Single-segment scoring ---------------------------------------------------
 
 def _score_segment(

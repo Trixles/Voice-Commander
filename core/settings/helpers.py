@@ -34,9 +34,6 @@ FILE_ACTION_KEY  = "open_file"
 # These are the only actions shown in the action dropdown.
 _USER_ACTIONS = {APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY}
 
-# Actions never shown in the dropdown (infrastructure -- slot-only or internal).
-_HIDDEN_ACTIONS = {"move_window_to_monitor", "set_volume", "open_settings"}
-
 # Actions shown in the dropdown, in display order.
 # Only user-editable actions; system actions cannot be picked.
 _SELECTABLE_ACTIONS = [

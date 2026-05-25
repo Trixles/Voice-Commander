@@ -73,6 +73,7 @@ from PySide6.QtWidgets import (
 
 from core.commands import (
     get_vosk_model_path, _default_commands,
+    find_duplicate_phrases, _build_block_message,
 )
 from core.paths import CONFIG_PATH
 from core.aliases import (
@@ -334,10 +335,38 @@ class SettingsDialog(QDialog):
         else:
             self._save_btn.setText("Save")
 
+    def _show_duplicate_block(self, dupes: list[dict]) -> None:
+        """Modal block shown when Save is refused due to duplicate phrases.
+
+        Pure presentation -- the detection and wording live in core.commands
+        (Qt-free, unit-tested). PlainText so guillemets / quotes / '<' in a
+        user's phrase aren't parsed as HTML. Single dismiss button; the Save
+        button stays enabled so the user can fix the dup and retry."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Can't save — duplicate phrase")
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(_build_block_message(dupes))
+        ok = box.addButton("Got it", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(ok)
+        box.setEscapeButton(ok)
+        box.exec()
+
     def _save(self) -> None:
         old_wake_words  = self._config.get("wake_words", [self._config.get("wake_word", "computer")])
 
         commands = self._commands_container.collect()
+
+        # Hard guard: two commands cannot share an exact phrase. Only the first
+        # in file order would ever fire; the rest are silently shadowed (and a
+        # disabled command still wins the match -- see _score_segment). Block
+        # the save and name the offenders. Returns BEFORE any write, so every
+        # pending edit stays in the dialog for the user to fix and retry.
+        dupes = find_duplicate_phrases(commands)
+        if dupes:
+            self._show_duplicate_block(dupes)
+            return
+
         overrides = self._overrides_container.collect()
         disabled_default_overrides = self._overrides_container.collect_disabled_defaults()
 

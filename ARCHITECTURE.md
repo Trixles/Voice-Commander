@@ -370,6 +370,30 @@ companion — keep them in sync.
   (and a buggy save could destroy data).
 - **Don't:** Strip dirty-signal plumbing. Make Save enabled-by-default.
 
+### Save is blocked on exact duplicate command phrases
+- **What:** `SettingsDialog._save()` calls `find_duplicate_phrases(commands)`
+  (core/commands.py) right after `collect()` and BEFORE any write. If two or
+  more commands share an exact phrase (case-insensitive, trimmed), it shows
+  `_show_duplicate_block` (a QMessageBox naming the offenders) and returns
+  early -- nothing is written, every pending edit stays in the dialog for the
+  user to fix and retry. Detection is EXACT-match only, EXCLUDES slot phrases
+  (`_has_slots`), de-dupes per command, and INCLUDES disabled commands (a
+  disabled command still wins the match and shadows the enabled twin -- see
+  "Disabled commands are matched but not dispatched"). Detection and the
+  message builder (`_build_block_message`) are pure and Qt-free, so they live
+  in commands.py and are unit-tested without Qt; the dialog only presents.
+- **Why:** Two commands can't usefully share a phrase -- only the first in
+  file order ever fires (strict `>` tie-break in `_score_segment`); the rest
+  are silently shadowed. There is no legitimate persistent duplicate, so the
+  state is forbidden rather than merely warned. The shipped defaults are
+  guarded by a test (no exact dups) because a default collision would lock
+  EVERY user out of saving.
+- **Don't:** Describe the block as catching ALL collisions -- it is
+  exact-match only; fuzzy near-collisions ("volume up" vs "volume app") sail
+  through by design. Filter disabled commands out of detection. Import the
+  PySide6-bound display helpers from `core/settings/helpers.py` into
+  commands.py (breaks `--emit-defaults`).
+
 ### `kwriteconfig6` calls use absolute path to kwinrc
 - **What:** Pass `os.path.expanduser("~/.config/kwinrc")` to
   `--file`, not bare `"kwinrc"`. Removes path resolution as a

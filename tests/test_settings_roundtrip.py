@@ -26,6 +26,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from core.settings.tabs.commands_tab import CommandsContainer  # noqa: E402
+from core.commands import find_duplicate_phrases  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -101,3 +102,22 @@ def test_enabled_roundtrips_through_collect_and_reload(qapp):
     assert recollected["volume_down"]["enabled"] is True
     assert recollected["set_volume"]["enabled"] is True
     assert recollected["close_window"]["enabled"] is True
+
+
+def test_duplicate_phrase_detected_through_collect(qapp):
+    """Integration: a real CommandsContainer with two rows sharing a phrase,
+    serialized via collect(), is caught by find_duplicate_phrases. This is the
+    exact path the Save block walks (collect() -> detector). The slot-pinned
+    rows collect() always appends carry slot phrases, so they don't false-fire."""
+    cmds = [
+        {"name": "open_reddit", "display_name": "Open Reddit",
+         "phrases": ["open reddit"], "action": "open_url",
+         "args": {"url": "https://reddit.com"}},
+        {"name": "open_reddit_two", "display_name": "Reddit Again",
+         "phrases": ["Open Reddit"], "action": "open_url",
+         "args": {"url": "https://old.reddit.com"}},
+    ]
+    dupes = find_duplicate_phrases(CommandsContainer(cmds).collect())
+    assert len(dupes) == 1
+    assert dupes[0]["phrase"].strip().lower() == "open reddit"
+    assert len(dupes[0]["commands"]) == 2

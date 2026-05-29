@@ -55,8 +55,7 @@ from core.run import run_capture
 # `open_mic` / `close_mic` system commands (see _default_commands), edited on
 # the Commands tab like any other system command. These constants are the
 # default phrases those commands ship with, and the in-process fallback used by
-# get_open_mic_phrases() / get_close_mic_phrases() when neither a command nor a
-# legacy top-level key is present.
+# get_open_mic_phrases() / get_close_mic_phrases() when no command is present.
 #
 # "open mike" / "close mike" are intentionally absent: the shipped `mike -> mic`
 # default override (core/overrides.py) rewrites them before matching.
@@ -328,41 +327,6 @@ def _default_commands() -> list[dict]:
     return commands
 
 
-def normalize_config(data: dict) -> dict:
-    """Apply in-place forward-migrations to a freshly loaded config dict.
-
-    Shared by both load paths (this module's load_config and the settings
-    dialog's _load_config) so runtime and UI agree on the migrated shape.
-    Idempotent.
-
-    0.8.0 -- mic phrases moved out of the top-level `open_mic_phrases` /
-    `close_mic_phrases` keys and into the command list as the `open_mic` /
-    `close_mic` system commands. For pre-0.8.0 configs: fold each legacy key
-    into a matching command (creating it from the legacy phrases if absent,
-    else just dropping the now-stale key -- the command is authoritative).
-    """
-    commands = data.get("commands")
-    if not isinstance(commands, list):
-        return data
-    present = {c.get("action") for c in commands if isinstance(c, dict)}
-    for action, legacy_key, display, defaults in (
-        ("open_mic", "open_mic_phrases", "Open mic", DEFAULT_OPEN_MIC_PHRASES),
-        ("close_mic", "close_mic_phrases", "Close mic", DEFAULT_CLOSE_MIC_PHRASES),
-    ):
-        legacy = data.pop(legacy_key, None)
-        if action in present:
-            continue  # already a command; the stale legacy key is now dropped
-        phrases = legacy if (isinstance(legacy, list) and legacy) else list(defaults)
-        commands.append({
-            "name": action,
-            "display_name": display,
-            "phrases": [str(p) for p in phrases],
-            "action": action,
-            "args": {},
-        })
-    return data
-
-
 def load_config() -> None:
     global _commands, _config, _last_mtime
     with open(CONFIG_PATH, "r") as f:
@@ -379,10 +343,6 @@ def load_config() -> None:
         with open(real_path, "w") as f:
             json.dump(data, f, indent=2)
         print(f"[commands] Defaults written to {real_path}")
-
-    # Forward-migrations (mic phrases -> system commands, etc.). In-memory only;
-    # the cleaned shape is persisted the next time the user saves from Settings.
-    normalize_config(data)
 
     _config = data
     _commands = data.get("commands", [])
@@ -466,17 +426,14 @@ def notifications_enabled() -> bool:
     return _config.get("notifications", True)
 
 
-def _mic_phrases(action: str, legacy_key: str, defaults: list[str]) -> set[str]:
+def _mic_phrases(action: str, defaults: list[str]) -> set[str]:
     """Resolve the active phrase set for a mic toggle, in priority order:
 
       1. The `open_mic`/`close_mic` system command in the list -- but ONLY if
          it's enabled. A disabled mic command returns an empty set, so the
          voice toggle stops working (tray left-click still toggles via the
          separate command-queue path).
-      2. The legacy top-level `open_mic_phrases`/`close_mic_phrases` key, for
-         configs written before 0.8.0 that haven't been migrated yet
-         (see _normalize_config).
-      3. The shipped defaults.
+      2. The shipped defaults.
     """
     for cmd in _commands:
         if cmd.get("action") == action:
@@ -484,18 +441,15 @@ def _mic_phrases(action: str, legacy_key: str, defaults: list[str]) -> set[str]:
                 return set()
             phrases = cmd.get("phrases") or []
             return {p.lower().strip() for p in phrases}
-    legacy = _config.get(legacy_key)
-    if isinstance(legacy, list) and legacy:
-        return {p.lower().strip() for p in legacy}
     return {p.lower().strip() for p in defaults}
 
 
 def get_open_mic_phrases() -> set[str]:
-    return _mic_phrases("open_mic", "open_mic_phrases", DEFAULT_OPEN_MIC_PHRASES)
+    return _mic_phrases("open_mic", DEFAULT_OPEN_MIC_PHRASES)
 
 
 def get_close_mic_phrases() -> set[str]:
-    return _mic_phrases("close_mic", "close_mic_phrases", DEFAULT_CLOSE_MIC_PHRASES)
+    return _mic_phrases("close_mic", DEFAULT_CLOSE_MIC_PHRASES)
 
 
 def get_overrides() -> list[dict]:
@@ -893,57 +847,49 @@ def _get_current_volume(gui_env: dict) -> str:
     return "?"
 
 
-def _build_notification(action_name: str, cmd: dict, merged: dict, gui_env: dict) -> str:
-    if action_name == "launch_app":
-        display = merged.get("app", "app")
-        return f"Opening {display}"
-    elif action_name == "open_url":
-        url = merged.get("url", "")
-        domain = (
-            url.removeprefix("https://")
-               .removeprefix("http://")
-               .removeprefix("www.")
-               .split("/")[0]
-        )
-        return f"Opening {domain}"
-    elif action_name == "open_file":
-        return f"Opening {os.path.basename(merged.get('path', ''))}"
-    elif action_name == "run_command":
-        return "Running command."
-    elif action_name == "set_volume":
-        return f"Volume set to {merged.get('level', '')}%"
-    elif action_name == "volume_up":
-        return f"Volume up ({_get_current_volume(gui_env)})"
-    elif action_name == "volume_down":
-        return f"Volume down ({_get_current_volume(gui_env)})"
-    elif action_name == "mute":
-        return "Muted"
-    elif action_name == "unmute":
-        return "Unmuted"
-    elif action_name == "media_pause":
-        return "Media paused"
-    elif action_name == "media_resume":
-        return "Media resumed"
-    elif action_name == "move_window_left":
-        return "Window moved left"
-    elif action_name == "move_window_right":
-        return "Window moved right"
-    elif action_name == "maximize_window":
-        return "Window maximized"
-    elif action_name == "close_window":
-        return "Window closed"
-    elif action_name == "move_window_to_monitor":
-        return "Window moved"
-    elif action_name == "open_settings":
-        return "Opening settings"
-    elif action_name == "shutdown":
-        return "Shutting down"
-    elif action_name == "restart":
-        return "Restarting"
-    elif action_name == "logout":
-        return "Logging out"
-    else:
+def _url_domain(url: str) -> str:
+    """Bare domain of a URL for notification text (strips scheme, www, path)."""
+    return (
+        url.removeprefix("https://")
+           .removeprefix("http://")
+           .removeprefix("www.")
+           .split("/")[0]
+    )
+
+
+# Per-action notification summaries. Each entry is a callable
+# (merged_args, gui_env) -> str; an action absent from the table falls back to
+# a generic acknowledgement. A table (rather than an if-elif chain) keeps the
+# action coverage scannable and gives any new action a safe default for free.
+_NOTIFICATION_TEMPLATES = {
+    "launch_app":   lambda m, env: f"Opening {m.get('app', 'app')}",
+    "open_url":     lambda m, env: f"Opening {_url_domain(m.get('url', ''))}",
+    "open_file":    lambda m, env: f"Opening {os.path.basename(m.get('path', ''))}",
+    "run_command":  lambda m, env: "Running command.",
+    "set_volume":   lambda m, env: f"Volume set to {m.get('level', '')}%",
+    "volume_up":    lambda m, env: f"Volume up ({_get_current_volume(env)})",
+    "volume_down":  lambda m, env: f"Volume down ({_get_current_volume(env)})",
+    "mute":         lambda m, env: "Muted",
+    "unmute":       lambda m, env: "Unmuted",
+    "media_pause":  lambda m, env: "Media paused",
+    "media_resume": lambda m, env: "Media resumed",
+    "move_window_left":       lambda m, env: "Window moved left",
+    "move_window_right":      lambda m, env: "Window moved right",
+    "maximize_window":        lambda m, env: "Window maximized",
+    "close_window":           lambda m, env: "Window closed",
+    "move_window_to_monitor": lambda m, env: "Window moved",
+    "open_settings": lambda m, env: "Opening settings",
+    "shutdown":      lambda m, env: "Shutting down",
+    "restart":       lambda m, env: "Restarting",
+    "logout":        lambda m, env: "Logging out",
+}
+
+
+def _build_notification(action_name: str, merged: dict, gui_env: dict) -> str:
+    template = _NOTIFICATION_TEMPLATES.get(action_name)
+    if template is None:
         return "Command acknowledged"
+    return template(merged, gui_env)
 
 
 def _required_args(fn) -> list[str]:
@@ -993,7 +939,7 @@ def _dispatch(cmd: dict, resolved_args: dict, gui_env: dict, context) -> None:
     print(f"[commands] Dispatching '{cmd['name']}'")
     fn(**merged)
 
-    summary = _build_notification(action_name, cmd, merged, gui_env)
+    summary = _build_notification(action_name, merged, gui_env)
     _last_fired[cmd["name"]] = time.time()
     if notifications_enabled():
         _notify(summary, gui_env=gui_env)

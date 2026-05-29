@@ -346,12 +346,10 @@ companion — keep them in sync.
   which read `commands.get_open_mic_phrases()` / `get_close_mic_phrases()`.
 - **Phrase resolution (`_mic_phrases`):** command-in-list (only if `enabled`;
   a disabled mic command returns an empty set, so the voice toggle stops while
-  the tray left-click still works) → legacy top-level `open_mic_phrases` /
-  `close_mic_phrases` key (pre-0.8.0 configs) → shipped defaults.
-- **Migration:** `normalize_config(data)` (idempotent) folds the legacy keys
-  into the command list and drops them. Called by BOTH load paths —
-  `commands.load_config()` and `core/settings/helpers._load_config()` — so the
-  listener and the dialog agree on the shape. Disk is cleaned on next save.
+  the tray left-click still works) → shipped defaults. The pre-0.8.0 migration
+  of top-level `open_mic_phrases` / `close_mic_phrases` keys was dropped in 1.0;
+  fresh installs get the system commands from `_default_commands()`, so there is
+  no remaining legacy-key path in either load path.
 - **Why:** Single source of truth, and the tab was redundant — phrase editing
   already exists for every system command.
 - **Don't:** Add a fallback constant in `listener.py`. Move the canonical

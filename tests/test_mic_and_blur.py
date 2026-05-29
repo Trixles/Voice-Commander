@@ -3,10 +3,9 @@ tests/test_mic_and_blur.py
 ==========================
 0.8.0 coverage:
 
-  1. The mic-phrases -> system-commands migration (normalize_config) and the
-     get_open_mic_phrases / get_close_mic_phrases resolution chain
-     (command list -> legacy key -> shipped defaults), including the
-     enable/disable behaviour.
+  1. The get_open_mic_phrases / get_close_mic_phrases resolution chain
+     (command list -> shipped defaults), including the enable/disable
+     behaviour.
   2. The matcher exclusion: open_mic / close_mic are listener state
      transitions, so _score_segment must never match them.
   3. blur_compositing_available: the kwinrc parse that decides whether the
@@ -28,59 +27,12 @@ from core import commands  # noqa: E402
 from core.commands import (  # noqa: E402
     DEFAULT_OPEN_MIC_PHRASES,
     DEFAULT_CLOSE_MIC_PHRASES,
-    normalize_config,
     _score_segment,
 )
 from core.env import blur_compositing_available  # noqa: E402
 
 
-# -- normalize_config: legacy mic keys -> system commands ---------------------
-
-def test_migration_creates_mic_commands_from_legacy_keys():
-    cfg = {
-        "commands": [{"name": "mute", "action": "mute", "phrases": ["mute"]}],
-        "open_mic_phrases": ["wake up", "start listening"],
-        "close_mic_phrases": ["go to sleep"],
-    }
-    normalize_config(cfg)
-    by_action = {c["action"]: c for c in cfg["commands"]}
-    assert by_action["open_mic"]["phrases"] == ["wake up", "start listening"]
-    assert by_action["close_mic"]["phrases"] == ["go to sleep"]
-    # Legacy top-level keys are dropped once folded in.
-    assert "open_mic_phrases" not in cfg
-    assert "close_mic_phrases" not in cfg
-
-
-def test_migration_uses_defaults_when_no_legacy_keys():
-    cfg = {"commands": [{"name": "mute", "action": "mute", "phrases": ["mute"]}]}
-    normalize_config(cfg)
-    by_action = {c["action"]: c for c in cfg["commands"]}
-    assert by_action["open_mic"]["phrases"] == list(DEFAULT_OPEN_MIC_PHRASES)
-    assert by_action["close_mic"]["phrases"] == list(DEFAULT_CLOSE_MIC_PHRASES)
-
-
-def test_migration_is_idempotent():
-    cfg = {"commands": [], "open_mic_phrases": ["x"]}
-    normalize_config(cfg)
-    normalize_config(cfg)
-    assert sum(1 for c in cfg["commands"] if c["action"] == "open_mic") == 1
-
-
-def test_migration_keeps_existing_command_and_drops_stale_legacy_key():
-    """If the command already exists, it's authoritative -- a leftover legacy
-    key is just dropped, not merged over the command."""
-    cfg = {
-        "commands": [
-            {"name": "open_mic", "action": "open_mic", "phrases": ["my custom"]},
-        ],
-        "open_mic_phrases": ["stale", "ignored"],
-    }
-    normalize_config(cfg)
-    om = [c for c in cfg["commands"] if c["action"] == "open_mic"]
-    assert len(om) == 1
-    assert om[0]["phrases"] == ["my custom"]
-    assert "open_mic_phrases" not in cfg
-
+# -- Default mic phrase lists -------------------------------------------------
 
 def test_default_mic_phrases_have_no_mike_variants():
     """'open mike'/'close mike' are covered by the mike->mic default override,
@@ -106,12 +58,6 @@ def test_getter_disabled_command_returns_empty_set(monkeypatch):
     ])
     monkeypatch.setattr(commands, "_config", {})
     assert commands.get_open_mic_phrases() == set()
-
-
-def test_getter_falls_back_to_legacy_key(monkeypatch):
-    monkeypatch.setattr(commands, "_commands", [])
-    monkeypatch.setattr(commands, "_config", {"open_mic_phrases": ["legacy phrase"]})
-    assert commands.get_open_mic_phrases() == {"legacy phrase"}
 
 
 def test_getter_falls_back_to_defaults(monkeypatch):

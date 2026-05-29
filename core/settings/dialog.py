@@ -60,7 +60,6 @@ Stash/restore:
     user-typed name persists across dropdown changes).
 """
 
-import json
 import os
 import re
 
@@ -75,7 +74,6 @@ from core.commands import (
     get_vosk_model_path, _default_commands,
     find_duplicate_phrases, _build_block_message,
 )
-from core.paths import CONFIG_PATH
 from core.aliases import (
     PINNED_SLOT as _PINNED_SLOT,
     default_aliases as _default_aliases,
@@ -512,6 +510,39 @@ class SettingsDialog(QDialog):
                 print(f"[settings] Service restart failed: {e}")
             self.accept()
 
+    def _confirm(self, title: str, body: str) -> bool:
+        """Yes/No confirmation dialog (No is the default). True iff Yes."""
+        reply = QMessageBox.question(
+            self, title, body,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _reset_via(self, mutate, *, log_label: str, fail_verb: str, post=None) -> bool:
+        """Load config, apply ``mutate(data)``, persist, and reload the runtime
+        config -- the shared body of every per-tab Restore-Defaults handler.
+
+        ``post`` (optional) runs inside the same try, after reload, for extra
+        side effects (e.g. Options' launch-on-login). Returns True on success;
+        on failure shows a warning and returns False so the caller bails before
+        its success dialog.
+        """
+        try:
+            data = _load_config()
+            mutate(data)
+            _write_config(data)
+            import core.commands as _cmds
+            _cmds.load_config()
+            if post is not None:
+                post()
+            print(f"[settings] {log_label}")
+            return True
+        except Exception as e:
+            print(f"[settings] Could not {fail_verb}: {e}")
+            QMessageBox.warning(self, "Reset failed", f"Could not {fail_verb}:\n{e}")
+            return False
+
     def _reset_commands(self) -> None:
         """
         Confirm with the user, then overwrite the commands list with defaults.
@@ -522,30 +553,20 @@ class SettingsDialog(QDialog):
         header (not the bottom button bar -- that global button was removed in
         favour of scoped per-tab resets).
         """
-        reply = QMessageBox.question(
-            self,
+        if not self._confirm(
             "Restore Defaults?",
             "This will replace all your custom commands with the defaults.\n\n"
             "Wake words, displays, open mic phrases, overrides, and model settings "
             "will NOT be affected.\n\n"
             "This cannot be undone. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        ):
             return
 
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                data = json.load(f)
+        def mutate(data):
             data["commands"] = _default_commands() + [dict(p) for p in _PINNED_SLOT]
-            _write_config(data)
-            import core.commands as _cmds
-            _cmds.load_config()
-            print("[settings] Commands reset to defaults.")
-        except Exception as e:
-            print(f"[settings] Reset failed: {e}")
-            QMessageBox.warning(self, "Reset failed", f"Could not reset commands:\n{e}")
+
+        if not self._reset_via(mutate, log_label="Commands reset to defaults.",
+                               fail_verb="reset commands"):
             return
 
         QMessageBox.information(
@@ -563,34 +584,26 @@ class SettingsDialog(QDialog):
         and runs `systemctl --user disable` immediately (this reset is NOT
         Save-gated -- it writes and closes, like the other per-tab resets).
         """
-        reply = QMessageBox.question(
-            self,
+        if not self._confirm(
             "Restore Default Options?",
             "This will turn notifications ON, reset recognition strictness to "
             "0.75, and turn OFF launch on login.\n\n"
             "This cannot be undone. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        ):
             return
 
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                data = json.load(f)
+        def mutate(data):
             data["notifications"] = True
             data["match_threshold"] = 0.75
-            _write_config(data)
-            import core.commands as _cmds
-            _cmds.load_config()
-            # Launch-on-login default is OFF. It's external systemd state, so we
-            # apply it here rather than writing it to config.
+
+        # Launch-on-login default is OFF. It's external systemd state, so apply
+        # it here rather than writing it to config.
+        def post():
             if self._orig_autostart is not None:
                 self._apply_autostart(False)
-            print("[settings] Options reset to defaults.")
-        except Exception as e:
-            print(f"[settings] Options reset failed: {e}")
-            QMessageBox.warning(self, "Reset failed", f"Could not reset options:\n{e}")
+
+        if not self._reset_via(mutate, log_label="Options reset to defaults.",
+                               fail_verb="reset options", post=post):
             return
 
         QMessageBox.information(
@@ -610,31 +623,21 @@ class SettingsDialog(QDialog):
         (DEFAULT_OVERRIDES), so "restoring defaults" means an empty user list
         plus all defaults switched back on.
         """
-        reply = QMessageBox.question(
-            self,
+        if not self._confirm(
             "Restore Default Overrides?",
             "This will remove every override you have added AND switch every "
             "built-in default back on.\n\n"
             "This cannot be undone. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        ):
             return
 
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                data = json.load(f)
+        def mutate(data):
             data["overrides"] = []
             # Re-enable all defaults (empty disabled set).
             data["disabled_default_overrides"] = []
-            _write_config(data)
-            import core.commands as _cmds
-            _cmds.load_config()
-            print("[settings] User overrides cleared.")
-        except Exception as e:
-            print(f"[settings] Override reset failed: {e}")
-            QMessageBox.warning(self, "Reset failed", f"Could not clear overrides:\n{e}")
+
+        if not self._reset_via(mutate, log_label="User overrides cleared.",
+                               fail_verb="clear overrides"):
             return
 
         QMessageBox.information(
@@ -656,35 +659,25 @@ class SettingsDialog(QDialog):
         until the dialog is reopened -- consistent with the rest of the
         Displays tab.
         """
-        reply = QMessageBox.question(
-            self,
+        if not self._confirm(
             "Restore Default Aliases?",
             "This will reset every monitor's alias list to the shipped defaults "
             "(Display 1, Display 2, ...).\n\n"
             "Wake words, commands, overrides, and other settings will NOT be affected.\n\n"
             "This cannot be undone. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        ):
             return
 
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                data = json.load(f)
+        def mutate(data):
             # Rebuild the monitors block from the dialog's monitor list using
             # default aliases keyed by display-index order.
             new_monitors: dict = {}
             for i, m in enumerate(self._monitors):
                 new_monitors[m["name"]] = _default_aliases(i + 1)
             data["monitors"] = new_monitors
-            _write_config(data)
-            import core.commands as _cmds
-            _cmds.load_config()
-            print("[settings] Display aliases reset to defaults.")
-        except Exception as e:
-            print(f"[settings] Display reset failed: {e}")
-            QMessageBox.warning(self, "Reset failed", f"Could not reset displays:\n{e}")
+
+        if not self._reset_via(mutate, log_label="Display aliases reset to defaults.",
+                               fail_verb="reset displays"):
             return
 
         QMessageBox.information(

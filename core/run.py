@@ -66,3 +66,12 @@ def run_capture(
         text=True,
         timeout=timeout,
     )
+
+
+def get_default_source() -> str:
+    """The current PipeWire/PulseAudio default source (microphone) name.
+
+    Returns an empty string if pactl cannot report one. Shared by the entry
+    point (initial mic) and the listener (mic-change detection on restart).
+    """
+    return run_capture(["pactl", "get-default-source"]).stdout.strip()

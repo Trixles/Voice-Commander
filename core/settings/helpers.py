@@ -237,15 +237,8 @@ def _load_desktop_apps() -> list[dict]:
 # -- Config IO ----------------------------------------------------------------
 
 def _load_config() -> dict:
-    # normalize_config applies the same forward-migrations the runtime loader
-    # does (e.g. 0.8.0 mic-phrases -> system commands), so the dialog and the
-    # listener agree on the config shape. Local import: commands.py does not
-    # import the settings package, so importing it here is cycle-free, and
-    # keeping it local avoids pulling commands.py in at helpers import time.
-    from core.commands import normalize_config
     with open(CONFIG_PATH, "r") as f:
-        data = json.load(f)
-    return normalize_config(data)
+        return json.load(f)
 
 
 def _write_config(data: dict) -> None:

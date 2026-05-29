@@ -36,17 +36,10 @@ import core.commands as commands
 from core.context import Context, State
 from core.env import GUI_ENV
 from core.listener import run_listener, wait_for_mic_ready
+from core.run import get_default_source
 from core.tray import VoiceCommanderTray
 from core.wake import WakeWordDetector
 from core.actions.windows import refresh_monitor_map
-
-
-# -- Mic source --------------------------------------------------------------
-
-def _get_default_source() -> str:
-    from core.run import run_capture
-    result = run_capture(["pactl", "get-default-source"])
-    return result.stdout.strip()
 
 
 # -- Single-instance guard ---------------------------------------------------
@@ -118,7 +111,7 @@ def _listener_thread(
     """Outer restart loop for the listener, runs in a background thread."""
     first_run = True
     while True:
-        source = _get_default_source()
+        source = get_default_source()
         print(f"[voice-commander] Default source: {source}")
 
         # On mic change (not first run), hold the error icon briefly so the

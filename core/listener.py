@@ -34,7 +34,7 @@ import vosk
 from core.context import Context, State
 from core.log_buffer import LOG_BUFFER
 from core.notify import notify as _notify
-from core.run import run_capture
+from core.run import get_default_source
 from core.wake import WakeWordDetector
 import core.commands as commands
 import core.overrides as overrides
@@ -77,11 +77,6 @@ _HALLUCINATION_STOPWORDS = {"the", "a", "an", "uh", "um", "huh", "oh", "and", "i
 
 
 # -- Helpers ------------------------------------------------------------------
-
-def _get_default_source() -> str:
-    result = run_capture(["pactl", "get-default-source"])
-    return result.stdout.strip()
-
 
 def _open_pw_record(source: str) -> subprocess.Popen:
     # Not routed through core.run: pw-record is a long-running streaming
@@ -215,6 +210,19 @@ def run_listener(
         if state_queue is not None:
             state_queue.put(new_state)
 
+    def enter_confirming(origin: State, now: float) -> None:
+        """Shared transition into CONFIRMING from SLEEPING / LISTENING /
+        OPEN_MIC: remember the state to restore on cancel/timeout, start the
+        confirm window, and fire the (always-on) confirm prompt + log line."""
+        nonlocal pre_confirm_state, confirm_start
+        pre_confirm_state = origin
+        confirm_start = now
+        set_state(State.CONFIRMING)
+        title = _confirm_title(context.pending_confirm)
+        _notify(title, _CONFIRM_BODY, timeout_ms=CONFIRM_WINDOW * 1000, gui_env=gui_env)
+        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  {title}")
+        print(f"[listener] -> CONFIRMING ({context.pending_confirm.get('name')})")
+
     rec  = vosk.KaldiRecognizer(model, 16000)
     proc = _open_pw_record(source)
     audio_queue = _start_reader(proc)
@@ -266,7 +274,7 @@ def run_listener(
         mic_check_counter += 1
         if mic_check_counter >= CHECK_MIC_EVERY:
             mic_check_counter = 0
-            new_source = _get_default_source()
+            new_source = get_default_source()
             if new_source != source:
                 print(f"[listener] Source changed to '{new_source}', restarting.")
                 if state_queue is not None:
@@ -326,17 +334,7 @@ def run_listener(
             _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
             if commands.try_match(text, gui_env, context):
                 if context.pending_confirm:
-                    pre_confirm_state = State.SLEEPING
-                    set_state(State.CONFIRMING)
-                    confirm_start = now
-                    _notify(
-                        _confirm_title(context.pending_confirm),
-                        _CONFIRM_BODY,
-                        timeout_ms=CONFIRM_WINDOW * 1000,
-                        gui_env=gui_env,
-                    )
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  {_confirm_title(context.pending_confirm)}")
-                    print(f"[listener] -> CONFIRMING ({context.pending_confirm.get('name')})")
+                    enter_confirming(State.SLEEPING, now)
                 else:
                     print("[listener] Command matched in wake utterance, back to sleep.")
                     set_state(State.SLEEPING)
@@ -356,17 +354,7 @@ def run_listener(
 
             if commands.try_match(text, gui_env, context):
                 if context.pending_confirm:
-                    pre_confirm_state = State.LISTENING
-                    set_state(State.CONFIRMING)
-                    confirm_start = now
-                    _notify(
-                        _confirm_title(context.pending_confirm),
-                        _CONFIRM_BODY,
-                        timeout_ms=CONFIRM_WINDOW * 1000,
-                        gui_env=gui_env,
-                    )
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  {_confirm_title(context.pending_confirm)}")
-                    print(f"[listener] -> CONFIRMING ({context.pending_confirm.get('name')})")
+                    enter_confirming(State.LISTENING, now)
                 else:
                     print("[listener] Command matched, back to sleep.")
                     set_state(State.SLEEPING)
@@ -401,17 +389,7 @@ def run_listener(
 
             if commands.try_match(text, gui_env, context):
                 if context.pending_confirm:
-                    pre_confirm_state = State.OPEN_MIC
-                    set_state(State.CONFIRMING)
-                    confirm_start = now
-                    _notify(
-                        _confirm_title(context.pending_confirm),
-                        _CONFIRM_BODY,
-                        timeout_ms=CONFIRM_WINDOW * 1000,
-                        gui_env=gui_env,
-                    )
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  {_confirm_title(context.pending_confirm)}")
-                    print(f"[listener] -> CONFIRMING ({context.pending_confirm.get('name')})")
+                    enter_confirming(State.OPEN_MIC, now)
                 else:
                     print("[listener] Command matched in open mic, staying in OPEN_MIC.")
                     set_state(State.OPEN_MIC)

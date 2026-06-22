@@ -131,6 +131,7 @@ def matcher_env(monkeypatch):
 
     dispatched: list[tuple[str, dict]] = []
     queued: list[str] = []
+    notified: list[tuple[str, str]] = []
 
     def fake_dispatch(cmd, args, gui_env, context):
         dispatched.append((cmd["name"], args))
@@ -146,33 +147,72 @@ def matcher_env(monkeypatch):
         commands.windows, "write_next_screen",
         lambda entry, gui_env: queued.append(entry),
     )
+    # Capture toasts so partial-execution tests can assert on the
+    # per-segment "No match" notifications.
+    monkeypatch.setattr(
+        commands, "_notify",
+        lambda summary, body="", timeout_ms=2000, gui_env=None:
+            notified.append((summary, body)),
+    )
 
-    return dispatched, queued
+    return dispatched, queued, notified
 
 
 def test_chain_success_both_dispatched(matcher_env):
-    dispatched, _ = matcher_env
+    dispatched, _, _ = matcher_env
     assert try_match("open reddit and open youtube", {}, _Ctx()) is True
     assert [d[0] for d in dispatched] == ["open_reddit", "open_youtube"]
 
 
-def test_chain_partial_failure_falls_through_to_single(matcher_env):
-    """One segment doesn't match a command -- chain is rejected (not
-    rule-rejected), so the unsplit text gets matched as a single
-    command. Here the full string doesn't match anything either, so
-    nothing fires."""
-    dispatched, _ = matcher_env
-    assert try_match("open reddit and floogleblork", {}, _Ctx()) is False
+def test_chain_partial_match_fires_matched_segment(matcher_env):
+    """Partial execution: one segment matches, the other doesn't. The
+    matched segment fires and the unmatched one raises a "'<seg>' No
+    match" toast -- it no longer kills the whole chain. (Old behavior
+    rejected the chain and fell through to single-match, firing nothing.)"""
+    dispatched, _, notified = matcher_env
+    assert try_match("open reddit and floogleblork", {}, _Ctx()) is True
+    assert [d[0] for d in dispatched] == ["open_reddit"]
+    assert ("No match", "'floogleblork'") in notified
+
+
+def test_chain_first_segment_mishear_still_fires_rest(matcher_env):
+    """Tyler's reported bug: a misheard FIRST segment used to silently
+    drop the whole chain. Now the good segment fires and the bad one
+    toasts."""
+    dispatched, _, notified = matcher_env
+    assert try_match("floogleblork and open youtube", {}, _Ctx()) is True
+    assert [d[0] for d in dispatched] == ["open_youtube"]
+    assert ("No match", "'floogleblork'") in notified
+
+
+def test_chain_all_miss_falls_through_no_toast(matcher_env):
+    """The false-split defense survives: when NO segment matches (e.g.
+    'open mind and body' -> ['open mind', 'body']), the chain is treated
+    as a misparse and falls through to single-match -- it must NOT emit a
+    per-segment toast. Here single-match also fails, so nothing fires."""
+    dispatched, _, notified = matcher_env
+    assert try_match("open mind and body", {}, _Ctx()) is False
     assert dispatched == []
+    assert notified == []
 
 
 def test_chain_rule_rejection_confirm_blocks_dispatch(matcher_env):
     """A chain containing a confirm-required command must fire NEITHER
     half -- returning False with no dispatch is the safety guarantee.
     No fall-through to single-match either."""
-    dispatched, _ = matcher_env
+    dispatched, _, _ = matcher_env
     assert try_match("shut down and open reddit", {}, _Ctx()) is False
     assert dispatched == []
+
+
+def test_chain_confirm_segment_aborts_even_after_earlier_match(matcher_env):
+    """Partial execution must NOT leak a guarded chain: when an earlier
+    segment matches but a LATER segment is confirm-required, the whole
+    chain still aborts -- the already-matched segment does not fire."""
+    dispatched, _, notified = matcher_env
+    assert try_match("open reddit and shut down", {}, _Ctx()) is False
+    assert dispatched == []
+    assert notified == []
 
 
 def test_chain_trailing_target_propagates(matcher_env):
@@ -181,7 +221,7 @@ def test_chain_trailing_target_propagates(matcher_env):
     fire (DP-1 vs None are distinct targets), so the fact that both
     commands dispatch and the placer queue has DP-1 twice IS the
     propagation proof."""
-    dispatched, queued = matcher_env
+    dispatched, queued, _ = matcher_env
     assert try_match(
         "open reddit and open youtube on primary", {}, _Ctx()
     ) is True
@@ -194,7 +234,7 @@ def test_chain_cross_monitor_urls_refused(matcher_env):
     """Two open_url commands with EXPLICIT different monitors race in
     ways we can't fix -- chain must be rejected, nothing dispatched,
     no queue write."""
-    dispatched, queued = matcher_env
+    dispatched, queued, _ = matcher_env
     assert try_match(
         "open reddit on primary and open youtube on secondary", {}, _Ctx()
     ) is False

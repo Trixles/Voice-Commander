@@ -261,6 +261,27 @@ def move_window_to_monitor(alias: str, gui_env: dict, context=None) -> None:
         context.update(last_command_name="move_window_to_monitor", last_monitor=output_name)
 
 
+def minimize_window(gui_env: dict, context=None) -> None:
+    """Minimize the active window via the 'Window Minimize' KWin global shortcut.
+
+    Same kglobalaccel-by-name pattern as maximize/close: we fire the named KWin
+    action rather than a key combo, so it works regardless of which (if any)
+    keyboard shortcut the user has bound to it.
+    """
+    run_bg(
+        [
+            "dbus-send", "--session", "--print-reply",
+            "--dest=org.kde.kglobalaccel",
+            "/component/kwin",
+            "org.kde.kglobalaccel.Component.invokeShortcut",
+            "string:Window Minimize",
+        ],
+        env=gui_env,
+    )
+    if context:
+        context.update(last_command_name="minimize_window")
+
+
 def maximize_window(gui_env: dict, context=None) -> None:
     """Maximize the active window via the 'Window Maximize' KWin global shortcut."""
     run_bg(

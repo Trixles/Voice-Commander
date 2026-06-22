@@ -131,11 +131,14 @@ def _is_user_action(action_key: str) -> bool:
 _SYSTEM_COMMAND_ORDER = [
     "open_mic",            # 0.8.0: was its own "Open Mic" tab, now a system row
     "close_mic",
-    "close_window",
-    "maximize_window",
+    # Window controls: all the "move window" commands first, then the
+    # minimize/maximize/close trio in that order.
     "move_window_left",
     "move_window_right",
     "move_to_monitor",     # slot-pinned
+    "minimize_window",
+    "maximize_window",
+    "close_window",
     "volume_up",
     "volume_down",
     "set_volume",          # slot-pinned

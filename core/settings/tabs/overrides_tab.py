@@ -273,11 +273,11 @@ class OverridesContainer(QWidget):
         # ---- User Overrides section ----------------------------------------
         layout.addWidget(_section_label("User Overrides"))
         user_blurb = QLabel(
-            "Rewrite specific Vosk mishearings before the matcher sees them -- "
-            "useful when Vosk consistently mishears the same word (e.g. it "
-            "transcribes \"cause\" when you say \"close\"). Patterns match whole "
-            "words only: a rule for \"in\" will not corrupt \"open\". Add one with "
-            "the button below; remove one with its ✕."
+            "Voice Commander's speech interpretation is powered by Vosk, which "
+            "is extremely lightweight, but also prone to inaccuracies. If the "
+            "interpreter is consistently mishearing a certain word or phrase "
+            "(e.g., it transcribes \"cause\" when you say \"close\"), you can "
+            "create an override rule for it here."
         )
         user_blurb.setWordWrap(True)
         user_blurb.setStyleSheet(self._BLURB_CSS)
@@ -315,9 +315,8 @@ class OverridesContainer(QWidget):
 
         layout.addWidget(_section_label("System Overrides"))
         sys_blurb = QLabel(
-            "Built-in rewrites that ship with Voice Commander, covering common "
-            "mishearings. Their patterns cannot be edited or deleted, but you "
-            "can toggle each one on or off."
+            "Built-in overrides covering common mishearings. They cannot be "
+            "edited, but you can toggle them on/off."
         )
         sys_blurb.setWordWrap(True)
         sys_blurb.setStyleSheet(self._BLURB_CSS)

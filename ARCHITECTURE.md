@@ -236,9 +236,24 @@ companion — keep them in sync.
   returns True; otherwise it's an opaque solid-dark panel. The dialog computes
   this once at construction (`self._translucent`), sets
   `WA_TranslucentBackground` only when true, and applies
-  `core/settings/style.build_stylesheet(translucent)` — which swaps the window
-  background between `transparent` and the Catppuccin base `#1e1e2e`.
+  `core/settings/style.build_stylesheet(translucent)`.
   `AppPickerDialog` gates its own `WA_TranslucentBackground` on the same check.
+- **Single frost panel (the layering rule):** the translucent tint is carried by
+  exactly ONE surface — `QWidget#frostPanel`, a full-window backing widget that
+  wraps the tabs + button bar (`dialog._build_ui`). In the translucent build
+  `#frostPanel` fills with `rgba(30, 30, 46, 0.8)` (Catppuccin base at 80% alpha)
+  and EVERY structural surface above it (dialog, tab pane, scroll area, tab bar,
+  tabs, button bar, `cmdBody`/`aliasBody`) is `transparent`, so the one frost
+  layer shows through uniformly. The opaque build gives those surfaces back the
+  original layered dark palette (`_BASE`/`_BODY`). `build_stylesheet` swaps a
+  per-surface `_THEME[translucent]` token dict into the template.
+- **Why a panel, not the QDialog background:** under `WA_TranslucentBackground`
+  the top-level QDialog's own stylesheet background does NOT reliably paint, so a
+  child panel is required. Two bugs the panel fixes vs. tinting every surface
+  directly: (1) nested tinted surfaces (dialog + pane + scroll area) STACK and
+  compound to near-opaque; (2) surfaces with no fill of their own (tab-bar corner
+  gaps, the button bar) become alpha-0 holes that show raw blurred wallpaper. The
+  alpha on `_FROST` (`style.py`) is the "how frosted" lever.
 - **Detection:** parse `~/.config/kwinrc`'s `[Plugins]` group (the file VC
   already writes via kwriteconfig6 — no new dependency). True iff stock
   `blurEnabled` is on — *absent counts as on*, since Plasma ships Blur enabled
@@ -251,9 +266,13 @@ companion — keep them in sync.
   detection. Erring toward opaque is deliberate (a default-on stock-blur user
   who has the key absent still reads as on; the failure we avoid is a no-blur
   user getting a see-through window).
-- **Don't:** Set `WA_TranslucentBackground` unconditionally. Hardcode the
-  window background as `transparent` in the stylesheet. Assume the stock
-  `blurEnabled` key is the only blur effect (third-party forks exist).
+- **Don't:** Set `WA_TranslucentBackground` unconditionally. Tint the QDialog
+  background and expect it to paint under translucency (use `#frostPanel`). Tint
+  multiple stacked surfaces in the translucent build (they compound to opaque) or
+  leave any structural surface with no fill (alpha-0 holes show raw wallpaper) —
+  in the translucent build, frost ONLY `#frostPanel` and keep everything above it
+  `transparent`. Assume the stock `blurEnabled` key is the only blur effect
+  (third-party forks exist).
 
 ### `run_command` is a user-action, not a system action
 - **What:** `_USER_ACTIONS` includes `run_command`; no default
@@ -431,14 +450,32 @@ companion — keep them in sync.
 - **Don't:** Assume one working proves the other works. Test both
   when changing anything monitor-related.
 
-### Chain abort rules return early; parse failures fall through
-- **What:** `try_match` tracks `chain_ok` (segments parsed?) and
-  `chain_rejected` (rule refused: confirm, cooldown, multi-URL
-  cross-monitor). Rule rejections return False immediately; parse
-  failures fall through to single-match as a rescue path.
-- **Why:** Firing half a refused chain is worse than nothing. The
-  rescue path is intentional for misparses only.
-- **Don't:** Collapse the two flags. Let rule rejections fall through.
+### Chains partial-execute; rule rejections abort wholesale
+- **What:** `_match_chain_segments` scores each segment into one of
+  three shapes: a real match `(cmd, args, target)`, a disabled sentinel
+  `("disabled", cmd)`, or a no-match sentinel `("nomatch", seg)`.
+  `try_match` then tracks `chain_ok` and `chain_rejected`:
+  - **Partial execution:** matched segments fire; `disabled` and
+    `nomatch` segments only toast (`nomatch` -> `"<seg>" No match`). A
+    single misheard segment no longer kills the whole chain.
+  - `chain_ok` = "at least one segment matched" (enabled or disabled).
+  - **All-miss** (`chain_ok=False`, not rejected): NO segment matched —
+    treat as a false split and fall through to single-match. This is
+    what still rescues `open mind and body` -> `["open mind","body"]`
+    (zero matches, and crucially NO per-segment toast).
+  - **Rule rejection** (`chain_rejected=True`): a segment matched but a
+    rule refused (confirm-required, cooldown, multi-URL cross-monitor).
+    Return False immediately and fire NOTHING — even already-matched
+    segments. Rejections abort wholesale even with partial execution on.
+- **Why:** A mishear shouldn't silently drop a valid sibling command
+  (the demo bug), but a guarded command (confirm/cooldown) or an
+  unfixable URL race must still veto the entire chain. The all-miss
+  fall-through keeps the aggressive `" and | an | in "` split from
+  toasting bogus fragments.
+- **Don't:** Collapse the two flags. Let rule rejections fall through to
+  single-match. Fire matched segments when `chain_rejected` is set.
+  Toast per-segment on the all-miss path (it's a misparse, not a partial
+  chain — let single-match emit one "No match").
 
 ### URL chains across different monitors are forbidden
 - **What:** Chains with 2+ `open_url` segments whose targets are

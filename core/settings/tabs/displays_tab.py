@@ -132,8 +132,10 @@ def build(dialog: "SettingsDialog") -> QWidget:
     tab, cl = dialog._make_scroll_tab()
     cl.addWidget(_section_label("Displays"))
     monitors_blurb = QLabel(
-        "Move the active window by saying \"move left\", \"move right\", \"move to [alias]\", or \"close window\". "
-        "Click Aliases to update each display's alias list."
+        "Connected displays are automatically detected. Click the Aliases "
+        "button to edit a display's aliases. Control the active window by "
+        "saying \"move left\", \"move right\", \"move to {alias}\", "
+        "\"minimize window\", \"maximize window\", or \"close window\"."
     )
     monitors_blurb.setWordWrap(True)
     monitors_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")

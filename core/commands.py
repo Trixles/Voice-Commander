@@ -89,6 +89,7 @@ ACTION_REGISTRY: dict[str, Any] = {
     "run_command":            system.run_command,
     "open_settings":          system.open_settings,
     "move_window_to_monitor": windows.move_window_to_monitor,
+    "minimize_window":        windows.minimize_window,
     "maximize_window":        windows.maximize_window,
     "move_window_left":       windows.move_window_left,
     "move_window_right":      windows.move_window_right,
@@ -155,53 +156,19 @@ def _detect_default_browser() -> str | None:
 _README_DEFAULT_PATH = os.path.expanduser("~/.local/share/voice-commander/README.md")
 
 
-def _default_commands() -> list[dict]:
-    """Generate the initial set of commands for a fresh install.
+def _default_system_commands() -> list[dict]:
+    """The built-in system commands (volume, media, window, power, mic, settings).
 
-    Single source of truth for the default command set. Used by:
-      - install.sh (via 'python -m core.commands --emit-defaults')
-      - settings.py's Restore Defaults button
+    Subprocess-free and deterministic -- no browser detection -- so it's cheap to
+    call on every load_config() for the missing-command merge (see load_config).
+    Single source of truth for the SYSTEM half of the default set; the user-action
+    examples (browser/reddit/readme) live in _default_commands().
 
-    Browser auto-detection: 'open_browser' and 'open_reddit' pre-populate the
-    user's system default browser if it can be detected from xdg-settings.
-    User can override in settings.
+    Does NOT include the slot-pinned commands (move_to_monitor, set_volume): those
+    live in core.aliases._PINNED_SLOT and self-heal via their own injection path,
+    so re-adding them here would duplicate them.
     """
-    browser_exe = _detect_default_browser()
-
     commands: list[dict] = []
-
-    # -- User-editable example commands ---------------------------------------
-    browser_cmd = {
-        "name": "open_browser",
-        "display_name": "Open Browser",
-        "phrases": ["open browser", "launch browser"],
-        "action": "launch_app",
-        "args": {},
-    }
-    if browser_exe:
-        browser_cmd["args"]["app"] = browser_exe
-    commands.append(browser_cmd)
-
-    reddit_cmd = {
-        "name": "open_reddit",
-        "display_name": "Open Reddit",
-        "phrases": ["open reddit", "open read it"],
-        "action": "open_url",
-        "args": {"url": "https://old.reddit.com"},
-    }
-    if browser_exe:
-        reddit_cmd["args"]["browser"] = browser_exe
-    commands.append(reddit_cmd)
-
-    commands.append({
-        "name": "open_readme",
-        "display_name": "Open ReadMe",
-        "phrases": ["open readme", "open read me"],
-        "action": "open_file",
-        "args": {"path": _README_DEFAULT_PATH},
-    })
-
-    # -- System actions -------------------------------------------------------
     commands.append({
         "name": "volume_up",
         "display_name": "Volume up",
@@ -256,6 +223,13 @@ def _default_commands() -> list[dict]:
         "display_name": "Move window right",
         "phrases": ["move right", "move window right"],
         "action": "move_window_right",
+        "args": {},
+    })
+    commands.append({
+        "name": "minimize_window",
+        "display_name": "Minimize window",
+        "phrases": ["minimize window", "minimize this window"],
+        "action": "minimize_window",
         "args": {},
     })
     commands.append({
@@ -323,6 +297,59 @@ def _default_commands() -> list[dict]:
         "args": {},
         "confirm": True,
     })
+    return commands
+
+
+def _default_commands() -> list[dict]:
+    """Generate the initial set of commands for a fresh install.
+
+    Single source of truth for the default command set. Used by:
+      - install.sh (via 'python -m core.commands --emit-defaults')
+      - settings.py's Restore Defaults button
+
+    Browser auto-detection: 'open_browser' and 'open_reddit' pre-populate the
+    user's system default browser if it can be detected from xdg-settings.
+    User can override in settings.
+    """
+    browser_exe = _detect_default_browser()
+
+    commands: list[dict] = []
+
+    # -- User-editable example commands ---------------------------------------
+    browser_cmd = {
+        "name": "open_browser",
+        "display_name": "Open Browser",
+        "phrases": ["open browser", "launch browser"],
+        "action": "launch_app",
+        "args": {},
+    }
+    if browser_exe:
+        browser_cmd["args"]["app"] = browser_exe
+    commands.append(browser_cmd)
+
+    reddit_cmd = {
+        "name": "open_reddit",
+        "display_name": "Open Reddit",
+        "phrases": ["open reddit", "open read it"],
+        "action": "open_url",
+        "args": {"url": "https://old.reddit.com"},
+    }
+    if browser_exe:
+        reddit_cmd["args"]["browser"] = browser_exe
+    commands.append(reddit_cmd)
+
+    commands.append({
+        "name": "open_readme",
+        "display_name": "Open ReadMe",
+        "phrases": ["open readme", "open read me"],
+        "action": "open_file",
+        "args": {"path": _README_DEFAULT_PATH},
+    })
+
+    # -- System actions -------------------------------------------------------
+    # System commands live in their own subprocess-free helper so load_config()
+    # can cheaply merge in any that a pre-existing config is missing.
+    commands.extend(_default_system_commands())
 
     return commands
 
@@ -343,6 +370,27 @@ def load_config() -> None:
         with open(real_path, "w") as f:
             json.dump(data, f, indent=2)
         print(f"[commands] Defaults written to {real_path}")
+    else:
+        # Self-healing migration: merge in any SYSTEM commands a pre-existing
+        # config predates (e.g. minimize_window, added after the user's config
+        # was first written). load_config() only seeds defaults when the list is
+        # empty, so without this an existing user never gets newly-shipped system
+        # commands -- and Restore Defaults would nuke their custom commands to do
+        # it. We add only by NAME and only system commands: user-action examples
+        # (browser/reddit/readme) are deletable and must STAY deleted, so they're
+        # never re-added. Slot-pinned commands aren't in _default_system_commands
+        # (they self-heal via _PINNED_SLOT), so they're untouched too. Toggle
+        # state on existing rows is preserved -- we only append what's missing.
+        existing_names = {c.get("name") for c in data["commands"]}
+        missing = [c for c in _default_system_commands()
+                   if c["name"] not in existing_names]
+        if missing:
+            data["commands"].extend(missing)
+            real_path = os.path.realpath(CONFIG_PATH)
+            with open(real_path, "w") as f:
+                json.dump(data, f, indent=2)
+            print(f"[commands] Merged {len(missing)} new system command(s) into "
+                  f"config: {[c['name'] for c in missing]}")
 
     _config = data
     _commands = data.get("commands", [])
@@ -774,36 +822,47 @@ def _match_chain_segments(
     """
     Score each segment of a candidate chain and gather matches.
 
-    This is the false-positive defense for the deliberately-aggressive split
-    pattern in try_match() (" and | an | in "). The pattern WILL produce
-    false splits ("open mind and body" -> ["open mind", "body"]); a false
-    split won't produce a match for every segment, so chain_ok comes back
-    False and the caller falls through to single-match.
+    Partial execution: a segment that scores below threshold no longer kills
+    the whole chain. It rides along as a ("nomatch", seg) sentinel; the caller
+    fires a "'<seg>' No match" toast for it while still dispatching the OTHER
+    matched segments. So a single mishear ("open it on monitor one and open
+    dolphin on monitor two") fires Dolphin and visibly flags the bad half.
 
-    Each entry in `matches` is one of two shapes:
+    The false-split defense for the deliberately-aggressive split pattern in
+    try_match() (" and | an | in ") moves to the return value. The pattern WILL
+    produce false splits ("open mind and body" -> ["open mind", "body"]); when
+    NOT ONE segment matches, chain_ok comes back False and the caller falls
+    through to single-match instead of toasting once per bogus fragment.
+
+    Each entry in `matches` is one of three shapes:
       - (cmd, args, target): a normal, dispatchable segment.
       - ("disabled", cmd): a segment whose best match is disabled in Settings.
-        It counts as "matched" for chain validity (so it does NOT flip
-        chain_ok to False), but the caller notifies instead of dispatching.
+        Counts as "matched" for chain validity; caller notifies, never fires.
+      - ("nomatch", seg): a segment that scored below threshold. Caller toasts
+        "'<seg>' No match" but still fires the rest. seg is raw segment text.
 
     Returns (matches, chain_ok, chain_rejected):
-      - chain_ok=True, chain_rejected=False: every segment matched (enabled or
-        disabled). Chain is dispatchable; disabled entries notify-and-skip.
-      - chain_ok=False, chain_rejected=False: at least one segment didn't
-        score. Treat as a misparse and fall through to single-match.
-      - chain_ok=False, chain_rejected=True: segments scored but a rule
-        refused (confirm-required, cooldown). Caller should return False
-        immediately -- the user clearly meant a chain; firing half of it
-        via the single-match rescue would be worse than firing nothing.
-        Disabled segments never trigger this: confirm/cooldown rules belong to
-        enabled commands and take precedence (a disabled segment sitting next
-        to a confirm-required one still aborts the chain).
+      - chain_ok=True, chain_rejected=False: at least one segment matched
+        (enabled or disabled). Dispatchable; disabled entries notify-and-skip,
+        nomatch entries notify-and-skip, the rest fire.
+      - chain_ok=False, chain_rejected=False: NO segment matched. Treat as a
+        misparse/false-split and fall through to single-match.
+      - chain_ok=False, chain_rejected=True: a segment scored but a rule
+        refused (confirm-required, cooldown). Caller returns False
+        immediately -- the user clearly meant a chain containing a guarded
+        command; firing the rest of it would be worse than refusing the whole
+        thing. Rule rejections still abort wholesale even with partial
+        execution on. Disabled/nomatch segments never trigger this.
     """
     matches: list = []
     for seg in segments:
         result = _score_segment(seg)
         if result is None:
-            return matches, False, False
+            # Below threshold: record a no-match sentinel and keep going. The
+            # caller toasts it but still fires the matched siblings (partial
+            # execution). The all-miss case is caught at the return below.
+            matches.append(("nomatch", seg))
+            continue
         if result[0] == "disabled":
             # Matched but disabled: ride along as a sentinel, do not abort.
             # Confirm/cooldown checks are skipped here -- a disabled command
@@ -827,7 +886,12 @@ def _match_chain_segments(
                 )
                 return matches, False, True
         matches.append((cmd, args, target))
-    return matches, True, False
+    # chain_ok = "at least one segment actually matched" (enabled or disabled).
+    # If every segment came back nomatch, this was a misparse/false-split, not
+    # a chain -- return False so the caller falls through to single-match
+    # rather than firing nothing and toasting each bogus fragment.
+    matched_any = any(m[0] != "nomatch" for m in matches)
+    return matches, matched_any, False
 
 
 # -- Dispatcher ---------------------------------------------------------------
@@ -875,6 +939,7 @@ _NOTIFICATION_TEMPLATES = {
     "media_resume": lambda m, env: "Media resumed",
     "move_window_left":       lambda m, env: "Window moved left",
     "move_window_right":      lambda m, env: "Window moved right",
+    "minimize_window":        lambda m, env: "Window minimized",
     "maximize_window":        lambda m, env: "Window maximized",
     "close_window":           lambda m, env: "Window closed",
     "move_window_to_monitor": lambda m, env: "Window moved",
@@ -980,6 +1045,18 @@ def _notify_disabled(cmd: dict, gui_env: dict) -> None:
         _notify(msg, gui_env=gui_env)
 
 
+def _notify_nomatch(seg: str, gui_env: dict) -> None:
+    """Notify (and log) that one segment of a chain matched no command, while
+    its sibling segments still fire (partial execution). Mirrors the
+    single-match "No match" toast so a misheard chain segment is visible
+    without reading the log -- e.g. "open it on monitor one and open dolphin"
+    fires Dolphin and toasts "'open it on monitor one' No match"."""
+    print(f"[commands] Chain segment no match: '{seg}'")
+    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match: '{seg}'")
+    if notifications_enabled():
+        _notify("No match", f"'{seg}'", gui_env=gui_env)
+
+
 # -- Main entry point ---------------------------------------------------------
 
 def try_match(heard: str, gui_env: dict, context) -> bool:
@@ -988,9 +1065,11 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
     Returns True if a command fired, False otherwise.
 
     Supports command chaining: "open reddit and open youtube" splits on
-    " and " and dispatches both if EVERY segment matches above threshold.
-    If any segment fails, falls back to matching the unsplit text.
-    Confirm-required commands cannot be chained.
+    " and " and dispatches every segment that matches above threshold. A
+    segment that doesn't match fires a "'<seg>' No match" notification while
+    its siblings still fire (partial execution). If NO segment matches, falls
+    back to matching the unsplit text. Confirm-required commands cannot be
+    chained -- a guarded segment aborts the whole chain.
     """
     _check_reload(gui_env)
 
@@ -1008,35 +1087,39 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
     # Split aggressively on " and ", " an ", or " in " -- the latter two are
     # common Vosk mishearings of "and" (the Blue Yeti reliably hears "and" as
     # "in"; cheaper mics do too). The pattern WILL produce false-positive
-    # splits like "open mind and body" -> ["open mind", "body"]. The defense
-    # is _match_chain_segments(), which requires every segment to score
-    # above threshold -- a bogus split won't satisfy that, and we fall
-    # through to single-match. Chained commands are a primary feature, so
-    # the aggressive split is deliberate; the per-segment match requirement
-    # is what makes it safe.
+    # splits like "open mind and body" -> ["open mind", "body"]. Partial
+    # execution (in _match_chain_segments) fires every segment that matches and
+    # toasts "'<seg>' No match" for those that don't -- so one misheard segment
+    # no longer kills the whole chain. The false-split defense survives as the
+    # all-miss guard: if NOT ONE segment matches, chain_ok is False and we fall
+    # through to single-match instead of toasting per bogus fragment.
     #
-    # Two failure modes, handled differently:
-    #  - chain_ok=False, chain_rejected=False: segments didn't all match
-    #    (likely a false-positive split). Fall through to single-match.
-    #  - chain_rejected=True: segments matched but a rule refused the chain
+    # Three outcomes, handled differently:
+    #  - chain_ok=True: >=1 segment matched. Fire the matches; toast the
+    #    disabled and nomatch segments.
+    #  - chain_ok=False, chain_rejected=False: NO segment matched (likely a
+    #    false-positive split). Fall through to single-match.
+    #  - chain_rejected=True: a segment matched but a rule refused the chain
     #    (confirm-required, cooldown, multi-URL cross-monitor). User intent
-    #    was clear; firing a partial match would be worse than nothing.
+    #    was clear; firing the rest would be worse than refusing the whole
+    #    thing. Rule rejections abort wholesale even with partial execution.
     chain_pattern = re.compile(r" and | an | in ", re.IGNORECASE)
     if chain_pattern.search(heard):
         segments = [s.strip() for s in chain_pattern.split(heard) if s.strip()]
         if len(segments) >= 2:
             matches, chain_ok, chain_rejected = _match_chain_segments(segments)
 
-            # Split matched segments into the dispatchable ones and the
-            # disabled sentinels. All the target/URL routing below operates on
-            # `active`; disabled segments only ever produce a "disabled in
-            # Settings" notification (see the dispatch block). A disabled
-            # segment counts as matched, so chain_ok stays True -- it just
-            # doesn't fire. A normal entry is (cmd, args, target); a disabled
-            # entry is ("disabled", cmd), so `m[0] != "disabled"` separates
-            # them (a dict is never equal to that string).
-            active = [m for m in matches if m[0] != "disabled"]
+            # Partition the segments three ways. All target/URL routing below
+            # operates on `active` (the dispatchable ones). `disabled` segments
+            # produce a "disabled in Settings" toast; `nomatch` segments produce
+            # a "'<seg>' No match" toast (partial execution) -- neither fires.
+            # Entry shapes: (cmd, args, target) | ("disabled", cmd) |
+            # ("nomatch", seg). m[0] is a dict for a real match and a literal
+            # string otherwise, so the membership tests separate them cleanly (a
+            # dict never equals "disabled"/"nomatch").
+            active   = [m for m in matches if m[0] not in ("disabled", "nomatch")]
             disabled = [m[1] for m in matches if m[0] == "disabled"]
+            nomatch  = [m[1] for m in matches if m[0] == "nomatch"]
 
             # Trailing-target propagation. When only the LAST segment carries
             # an explicit "on {alias}" and every earlier segment is untargeted,
@@ -1086,6 +1169,11 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                 # validation (so they don't fail the chain) but stop here.
                 for cmd in disabled:
                     _notify_disabled(cmd, gui_env)
+
+                # Misheard/unmatched segments: toast each so the user sees which
+                # part of the chain didn't fire, then carry on (partial exec).
+                for seg in nomatch:
+                    _notify_nomatch(seg, gui_env)
 
                 if active:
                     print(f"[commands] Chained {len(active)} commands")

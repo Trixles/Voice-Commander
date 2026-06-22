@@ -306,6 +306,17 @@ def run_listener(
                 pass
 
         if not rec.AcceptWaveform(data):
+            # Mid-utterance: Vosk has no final text yet. While the user is
+            # actively speaking in LISTENING, keep the command window alive so a
+            # long phrase (e.g. a multi-segment chain) can't fall asleep before
+            # it finishes. This turns command_window into an INACTIVITY timer --
+            # it counts silence since you stopped talking, not wall-clock since
+            # the wake word. OPEN_MIC has no window; SLEEPING has no window and
+            # arrives as one utterance, so this only matters in LISTENING.
+            if context.state == State.LISTENING:
+                partial = json.loads(rec.PartialResult()).get("partial", "").strip()
+                if partial:
+                    command_window_start = now
             continue
 
         result = json.loads(rec.Result())

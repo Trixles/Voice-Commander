@@ -82,9 +82,9 @@ def build(dialog: "SettingsDialog") -> QWidget:
     dialog._notifications_toggle.setChecked(bool(dialog._config.get("notifications", True)))
     cl.addWidget(_control_row("Enable notifications", dialog._notifications_toggle))
     cl.addWidget(_help(
-        "Show desktop notifications for general feedback (commands fired, mic "
-        "on/off, errors, “Listening…”). Confirmation prompts for "
-        "shutdown, restart, and logout ALWAYS appear, even when this is off."
+        "Show desktop notifications for command activations, open mic toggle, "
+        "errors, etc. Confirmation prompts for shutdown, restart, and logout "
+        "commands ALWAYS trigger notifications, even with this setting disabled."
     ))
 
     # -- Recognition strictness (config-backed match threshold) ---------------
@@ -126,47 +126,46 @@ def build(dialog: "SettingsDialog") -> QWidget:
     cl.addWidget(srow)
 
     cl.addWidget(_help(
-        "How closely what you say must match a command phrase (0.00–1.00). "
+        "How closely what you say must match a command phrase to execute it. "
         "Default is 0.75."
     ))
     warn = QLabel(
-        "Heads up — this is the raw match threshold. Lower = looser (more "
-        "misfires); higher = stricter (it may not hear you). Far below ~0.40 "
-        "nearly everything matches; above ~0.95 almost nothing will. If voice "
-        "stops working, hit Restore Defaults to snap back to 0.75."
+        "Heads up — this is the raw match threshold. Lower = looser (commands "
+        "may misfire); higher = stricter (commands may not register). It is "
+        "not recommended to adjust this setting unless you know what you're "
+        "doing."
     )
     warn.setWordWrap(True)
     warn.setStyleSheet(_WARN_STYLE)
     cl.addWidget(warn)
 
-    # -- About (subsection; blurb unchanged -- Tyler rewrites it later) -------
+    # -- About (subsection) ---------------------------------------------------
     cl.addWidget(_h_rule())
     cl.addWidget(_section_label("About"))
     how_blurb = QLabel(
-        "Voice Commander runs in the background and listens for a wake word. "
-        "When it hears one, it listens for commands for 5 seconds; if it hears one of the phrases "
-        "that match a command, it performs the corresponding action.\n\n"
-        "Use the Commands tab to set your wake word(s), add custom commands, edit their phrases, "
-        "and choose which action each command performs.\n\n"
-        "The Displays tab lets you assign \"aliases\" to your displays, so you can quickly move windows "
-        "with voice commands (\"move left\", \"move right\", \"move to [alias]\").\n\n"
-        "Open Mic mode listens to ALL commands without requiring a wake word. Left-click the tray "
-        "icon to toggle Open Mic mode on or off, or say an \"Open mic\" / \"Close mic\" phrase. Those "
-        "are system commands on the Commands tab, so you can edit their phrases or disable them there "
-        "like any other.\n\n"
-        "The Model tab lets you choose which model to use for speech interpretation. Voice Commander "
-        "was designed to be as lightweight as possible, so I recommend using the small model, but "
-        "I've left the option open. The small model is not as accurate, but is generally good enough, "
-        "and it uses practically zero CPU/RAM.\n\n"
-        "The Log tab shows what is being heard by the interpreter. If it consistently mishears any of "
-        "your command phrases, you can just add whatever the \"misheard phrase\" is to that Command's "
-        "phrases list.\n\n"
-        "Is it the sexiest, cleanest thing ever?\n\n"
-        "No. No, it's not.\n\n"
-        "Does it totally work if you take like 5 mins to set up the phrases right, and then use basically "
-        "no system overhead?\n\n"
-        "Yes, yes it does!\n\n"
-        ";)"
+        "Voice Commander runs quietly in the background and listens for a wake "
+        "word. When it hears one, it wakes up and listens briefly for any "
+        "commands; if it hears a phrase that matches a command, it performs the "
+        "corresponding action.\n\n"
+        "The Commands tab is where you set the wake words and add or edit "
+        "commands. You can use commands to open an application, file, or URL, "
+        "or to run shell commands.\n\n"
+        "The Displays tab lets you assign aliases to your displays, so you can "
+        "quickly move windows across displays using voice commands, or choose "
+        "which display to execute a command on.\n\n"
+        "The Model tab lets you choose which Vosk model to use for speech "
+        "interpretation. Voice Commander was designed to be as lightweight as "
+        "possible, so I recommend using the small model, but I've left the "
+        "option open. The small model is not as accurate, but is generally good "
+        "enough, and uses practically zero system resources.\n\n"
+        "The Log tab shows what is being heard by the interpreter, and tracks "
+        "command activations. If it is consistently mishearing a particular "
+        "word or phrase, this can be helpful to diagnose the issue and create "
+        "an override for it.\n\n"
+        "Open Mic mode allows commands to be executed without requiring a wake "
+        "word beforehand. Click the tray icon to toggle Open Mic mode, or use "
+        "the \"Open Mic\"/\"Close Mic\" voice commands (the phrases can be "
+        "edited in the Commands tab, under System Commands)."
     )
     how_blurb.setWordWrap(True)
     how_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")

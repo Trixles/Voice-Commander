@@ -8,17 +8,25 @@ Lives in its own module so the dialog code reads end-to-end without
 the embedded CSS wall, and so any other window in the app can apply
 the same palette by importing `STYLESHEET` / `build_stylesheet`.
 
-Comes in two builds that differ ONLY in the window background:
-`build_stylesheet(translucent=True)` leaves it `transparent` (for desktops
-whose compositor blurs behind the window) and `translucent=False` paints a
-solid Catppuccin-base panel (for desktops with no blur). The dialog picks
-between them at construction via `core.env.blur_compositing_available()`.
+Comes in two builds that differ ONLY in the window background's alpha:
+`build_stylesheet(translucent=True)` paints a semi-opaque Catppuccin-base tint
+(for desktops whose compositor blurs behind the window, so the blur frosts
+through) and `translucent=False` paints the same base fully solid (for desktops
+with no blur). The dialog picks between them at construction via
+`core.env.blur_compositing_available()`.
 """
 
 _STYLESHEET_TEMPLATE = """
     QDialog {
-        background-color: __WINDOW_BG__;
+        background-color: __DIALOG_BG__;
         color: #cdd6f4;
+    }
+    QWidget#frostPanel {
+        /* The single full-window backing surface. Translucent build: the one
+           layer that carries the frosted tint. Opaque build: the solid base.
+           Everything structural above it is transparent so this shows through
+           uniformly (see dialog.py _build_ui and build_stylesheet below). */
+        background-color: __FROST_BG__;
     }
     QLabel {
         color: #cdd6f4;
@@ -95,10 +103,10 @@ _STYLESHEET_TEMPLATE = """
         border: 1px solid #45475a;
         border-top: none;
         border-bottom: none;
-        background-color: __WINDOW_BG__;
+        background-color: __PANE_BG__;
     }
     QTabBar::tab {
-        background-color: #181825;
+        background-color: __TAB_BG__;
         color: #6c7086;
         border: 1px solid #45475a;
         border-bottom: none;
@@ -114,15 +122,15 @@ _STYLESHEET_TEMPLATE = """
         border-right: 1px solid #45475a;
     }
     QTabBar::tab:selected {
-        background-color: __WINDOW_BG__;
+        background-color: __TAB_SELECTED_BG__;
         color: #cdd6f4;
     }
     QTabBar::tab:hover:!selected {
-        background-color: #313244;
+        background-color: __TAB_HOVER_BG__;
         color: #cdd6f4;
     }
     QScrollArea, QScrollArea > QWidget > QWidget {
-        background-color: __WINDOW_BG__;
+        background-color: __SCROLL_BG__;
     }
     QScrollArea {
         border: none;
@@ -145,14 +153,14 @@ _STYLESHEET_TEMPLATE = """
         border: 1px solid #45475a;
         border-top: none;
         border-radius: 0 0 4px 4px;
-        background-color: #181825;
+        background-color: __BODY_BG__;
         margin: 0 0 6px 0;
     }
     QFrame#aliasBody {
         border: 1px solid #45475a;
         border-top: none;
         border-radius: 0 0 4px 4px;
-        background-color: #181825;
+        background-color: __BODY_BG__;
         margin: 0 0 6px 0;
     }
     QScrollBar:vertical {
@@ -211,12 +219,52 @@ _STYLESHEET_TEMPLATE = """
     }
 """
 
-# The window background is the only value that differs between the translucent
-# and opaque builds: `transparent` lets a compositor blur show through (the
-# frosted-glass look), while the Catppuccin base `#1e1e2e` paints a solid dark
-# panel for desktops with no blur. Everything else (controls, borders, the
-# darker tab-bar/body tones) is identical in both.
-_OPAQUE_WINDOW_BG = "#1e1e2e"
+# How the two builds differ. The KEY idea: in the translucent build a SINGLE
+# surface -- `#frostPanel`, the full-window backing widget added in dialog.py --
+# carries one frosted tint, and every structural surface above it is
+# `transparent` so the frost shows through uniformly. That avoids the two bugs a
+# naive "tint every surface" approach hit: (1) nested tinted surfaces (dialog +
+# pane + scroll area) STACKED, compounding to near-opaque; (2) surfaces with no
+# background of their own (the tab-bar corner gaps, the button bar) were alpha-0
+# holes that showed raw blurred wallpaper, because the top-level QDialog's own
+# stylesheet background does NOT reliably paint under WA_TranslucentBackground.
+# The opaque build (no compositor blur) keeps the original layered dark palette.
+#
+# `_FROST` is the lever for "how frosted": lower alpha = more blurred desktop
+# bleeds through; higher = more solid. It's the only translucent surface with a
+# real fill; everything else is transparent and just shows it.
+_BASE = "#1e1e2e"           # Catppuccin base (opaque panel / solid frost base)
+_BODY = "#181825"           # darker accent (tab bar, row bodies) in opaque build
+_FROST = "rgba(30, 30, 46, 0.8)"   # #1e1e2e at 80% alpha -- the translucent tint
+
+# Per-surface background values, keyed by build. Translucent: only #frostPanel
+# fills; all else transparent (single frost layer, no stacking, no holes).
+_THEME = {
+    True: {  # translucent
+        "__FROST_BG__":        _FROST,
+        "__DIALOG_BG__":       "transparent",
+        "__PANE_BG__":         "transparent",
+        "__SCROLL_BG__":       "transparent",
+        # Inactive tabs stay SOLID (opaque _BODY) so the frosted, see-through
+        # active tab clearly stands out as "where you are" -- font colour alone
+        # wasn't enough of a cue. Only the selected tab is transparent, so it
+        # reads as merging into the frosted body below it.
+        "__TAB_BG__":          _BODY,
+        "__TAB_SELECTED_BG__": "transparent",
+        "__TAB_HOVER_BG__":    "#313244",  # opaque highlight, matches solid tabs
+        "__BODY_BG__":         "transparent",
+    },
+    False: {  # opaque -- the original layered palette
+        "__FROST_BG__":        _BASE,
+        "__DIALOG_BG__":       _BASE,
+        "__PANE_BG__":         _BASE,
+        "__SCROLL_BG__":       _BASE,
+        "__TAB_BG__":          _BODY,
+        "__TAB_SELECTED_BG__": _BASE,
+        "__TAB_HOVER_BG__":    "#313244",
+        "__BODY_BG__":         _BODY,
+    },
+}
 
 
 def build_stylesheet(translucent: bool = True) -> str:
@@ -225,8 +273,10 @@ def build_stylesheet(translucent: bool = True) -> str:
     Pass the result of `core.env.blur_compositing_available()` as `translucent`
     so the window only goes see-through when a blur will composite behind it.
     """
-    bg = "transparent" if translucent else _OPAQUE_WINDOW_BG
-    return _STYLESHEET_TEMPLATE.replace("__WINDOW_BG__", bg)
+    sheet = _STYLESHEET_TEMPLATE
+    for token, value in _THEME[bool(translucent)].items():
+        sheet = sheet.replace(token, value)
+    return sheet
 
 
 # Back-compat: importers that just want the default (translucent) sheet.

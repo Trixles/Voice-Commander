@@ -146,6 +146,22 @@ class SettingsDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        # Single full-window backing panel. In the translucent build this is the
+        # ONE surface that paints the frosted tint (rgba); every structural
+        # surface above it (tabs, pane, scroll area, button bar, row bodies) is
+        # transparent so the frost shows through uniformly -- no stacking (which
+        # compounded to near-opaque) and no alpha-0 holes (the tab-bar gaps and
+        # button bar that used to show raw wallpaper). The top-level QDialog's
+        # own stylesheet background does NOT reliably paint under
+        # WA_TranslucentBackground, which is exactly why a child panel is needed.
+        # See core/settings/style.py.
+        panel = QWidget()
+        panel.setObjectName("frostPanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(0)
+        root.addWidget(panel)
+
         self._tabs = QTabWidget()
         self._tabs.addTab(self._build_commands_tab(), "Commands")
         self._tabs.addTab(self._build_overrides_tab(), "Overrides")
@@ -155,7 +171,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._build_options_tab(), "Options")
         self._tabs.tabBar().setExpanding(True)
         self._tabs.tabBar().setMinimumWidth(540)
-        root.addWidget(self._tabs)
+        panel_layout.addWidget(self._tabs)
 
         # Map tab title -> per-tab reset handler. Tabs absent from this map
         # (Model, Log) have no per-tab defaults and disable the
@@ -191,7 +207,7 @@ class SettingsDialog(QDialog):
         bl.addWidget(self._reset_btn)
         bl.addWidget(self._close_btn)
         bl.addStretch()
-        root.addWidget(btn_bar)
+        panel_layout.addWidget(btn_bar)
 
         # Initial state of the Restore Defaults button matches the current tab,
         # and updates whenever the user switches tabs.

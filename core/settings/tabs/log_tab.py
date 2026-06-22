@@ -68,9 +68,10 @@ def build(dialog: "SettingsDialog") -> QWidget:
     tab, cl = dialog._make_scroll_tab()
     cl.addWidget(_section_label("Logging"))
     log_blurb = QLabel(
-        "This log tracks what is actually heard by the interpreter. "
-        "If the interpreter is consistently mishearing a command's phrase as something else, "
-        "add that as a phrase for the command, and then it will activate even when it mishears you."
+        "The log tracks wake word and command activation, as well as exactly "
+        "what is heard by the interpreter (which is sometimes unintentionally "
+        "hilarious). If a certain word or phrase is being consistently "
+        "misheard, you can create an override for it in the Overrides tab."
     )
     log_blurb.setWordWrap(True)
     log_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")

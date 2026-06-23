@@ -117,6 +117,24 @@ companion — keep them in sync.
 - **Don't:** Lower `TAIL_THRESHOLD` below ~0.55 — the gap to
   semantically-unrelated tails closes fast there.
 
+### Short single-token phrases require a higher match floor
+- **What:** In `_match_non_slot()` (`core/matcher.py`), a phrase that is a
+  single token must clear `SHORT_PHRASE_THRESHOLD` (0.85) or it is
+  hard-rejected (returns 0.0). Multi-token phrases are unaffected — they
+  take the normal / tail-rescore path.
+- **Why:** `SequenceMatcher` scores short strings deceptively high: one
+  swapped letter in a 5-char word still yields ~0.80, which clears the 0.75
+  default and fires the wrong command. Canonical case: "cause" → "pause"
+  (0.80). Bumping the GLOBAL threshold was rejected — it would have to
+  exceed 0.80, penalising legitimate garbles of longer commands. The floor
+  targets only the phrases that actually have the problem.
+- **Effective bar:** applied as a hard reject inside the matcher, so the
+  effective threshold for a single-token phrase is `max(global threshold,
+  0.85)` — never looser than the user's strictness slider.
+- **Don't:** Don't gate on the HEARD length — gate on the PHRASE being a
+  single token (the phrase is the known/fixed side). Don't fold it into the
+  global threshold.
+
 ### Settings UI has two command-row tiers
 - **What:** User actions (editable name/dropdown, deletable, alphabetized)
   and system commands (locked name, editable phrases for most, read-only

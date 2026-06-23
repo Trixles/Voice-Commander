@@ -64,8 +64,37 @@ def test_tail_rescore_skipped_when_leading_token_differs():
 
 def test_tail_rescore_skipped_for_single_word_phrases():
     """Single-word phrases (e.g. 'mute', 'shutdown') have no tail
-    to rescore, so the guard is a no-op."""
+    to rescore, so the tail guard is a no-op (the short-phrase floor
+    below is a separate guard)."""
     assert _match_non_slot("mute", "mute") == pytest.approx(1.0)
+
+
+# -- _match_non_slot: short single-token phrase floor -------------------------
+
+def test_short_phrase_rejects_near_homophone():
+    """Single-token command phrases are dangerously easy to trigger by
+    accident: one swapped letter in a 5-char word still scores ~0.80,
+    clearing the 0.75 default. 'cause' vs 'pause' is the canonical case --
+    it must hard-zero instead of returning the inflated 0.80 ratio."""
+    assert _match_non_slot("cause", "pause") == 0.0
+
+
+def test_short_phrase_accepts_exact():
+    """An exact single-token match is 1.0 and sails over the floor."""
+    assert _match_non_slot("pause", "pause") == pytest.approx(1.0)
+
+
+def test_short_phrase_accepts_close_garble():
+    """A genuinely close single-token garble still clears the floor:
+    'paused' vs 'pause' scores ~0.91, well above SHORT_PHRASE_THRESHOLD."""
+    assert _match_non_slot("paused", "pause") >= 0.85
+
+
+def test_short_phrase_floor_does_not_apply_to_multiword_phrases():
+    """The floor is gated on single-token PHRASES. A multi-word phrase
+    with a distinct tail still goes through the normal/tail path, not the
+    0.85 floor -- so a plausible two-word garble is not collateral damage."""
+    assert _match_non_slot("open plix", "open plex") >= 0.75
 
 
 # -- _extract_slots: greedy vs lazy regex -------------------------------------

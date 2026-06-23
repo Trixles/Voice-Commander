@@ -36,6 +36,16 @@ _DEBUG = os.environ.get("VC_DEBUG_MATCHER") == "1"
 TAIL_THRESHOLD = 0.60
 
 
+# Minimum match floor for single-token command phrases. Short phrases score
+# deceptively high under SequenceMatcher: one swapped letter in a 5-char word
+# still yields ~0.80 ("cause" vs "pause"), which clears the 0.75 default and
+# fires the wrong command. Requiring a higher floor for single-token phrases is
+# the single-token analogue of TAIL_THRESHOLD. Applied as a hard reject inside
+# _match_non_slot, so the effective bar for a short phrase is max(global
+# threshold, this) -- never looser than the user's strictness setting.
+SHORT_PHRASE_THRESHOLD = 0.85
+
+
 def _similarity(a: str, b: str) -> float:
     """Return SequenceMatcher.ratio() of a and b, case-insensitive."""
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
@@ -107,6 +117,22 @@ def _match_non_slot(heard: str, phrase: str) -> float:
 
     h_tokens = heard.split()
     p_tokens = phrase.split()
+
+    # Short single-token phrases ("pause", "mute", "play") demand a higher floor:
+    # a one-letter substitution still scores ~0.80, clearing the 0.75 default
+    # ("cause" -> "pause"). Reject anything under SHORT_PHRASE_THRESHOLD. This is
+    # the single-token analogue of the tail-rescore guard below.
+    if len(p_tokens) == 1:
+        if overall < SHORT_PHRASE_THRESHOLD:
+            if _DEBUG:
+                print(f"  '{heard}' vs '{phrase}': {overall:.2f} "
+                      f"(single-token < {SHORT_PHRASE_THRESHOLD} -- rejected)")
+            return 0.0
+        if _DEBUG:
+            print(f"  '{heard}' vs '{phrase}': {overall:.2f} "
+                  f"(single-token, cleared {SHORT_PHRASE_THRESHOLD})")
+        return overall
+
     if (len(h_tokens) >= 2 and len(p_tokens) >= 2
             and h_tokens[0].lower() == p_tokens[0].lower()):
         h_tail = " ".join(h_tokens[1:])

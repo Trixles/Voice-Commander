@@ -77,7 +77,7 @@ Try a few defaults to verify it's working:
 
 ## What ships out of the box
 
-21 default commands out of the box (the last two are slot-phrase forms):
+22 default commands out of the box (the last two are slot-phrase forms):
 
 | Command          | Phrases                                | What it does                |
 |------------------|----------------------------------------|-----------------------------|
@@ -90,6 +90,7 @@ Try a few defaults to verify it's working:
 | Pause Media      | "pause", "pause media"                 | MPRIS pause                 |
 | Resume Media     | "resume", "play", "resume media"       | MPRIS play                  |
 | Move Window L/R  | "move left", "move right"              | Move to next monitor        |
+| Minimize Window  | "minimize window"                      | Minimizes focused window    |
 | Maximize Window  | "maximize window"                      | Maximizes focused window    |
 | Close Window     | "close window"                         | Closes focused window       |
 | Open Mic         | "open mic", "open microphone"          | Enter open-mic mode         |

@@ -66,12 +66,9 @@ def build(dialog: "SettingsDialog") -> QWidget:
     else:
         dialog._autostart_toggle.setEnabled(False)
     cl.addWidget(_control_row("Launch on login", dialog._autostart_toggle))
-    if autostart_available:
-        cl.addWidget(_help(
-            "Start Voice Commander automatically when you log in. Off by default "
-            "— turn it on here if you want it always running."
-        ))
-    else:
+    # "Launch on login" is self-explanatory, so no descriptive help text. The
+    # only note we show is when the toggle is disabled, explaining *why*.
+    if not autostart_available:
         cl.addWidget(_help(
             "Launch on login is unavailable — the systemd user service "
             "wasn't found (running from source rather than an install?)."

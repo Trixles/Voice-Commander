@@ -617,3 +617,48 @@ companion — keep them in sync.
   (Tyler rewrites the blurb later).
 - **Don't:** Assume Restore Defaults is Save-gated (it writes + closes
   immediately). Forget that the Options reset also disables autostart.
+
+### Wake is acknowledged on partials; LISTENING is an inactivity window; no-match is one-shot
+- **What:** The SLEEPING→LISTENING feedback (tray icon, mic LED, "Listening…"
+  notification) tracks *speech*, not Vosk's end-of-utterance endpoint (~1.5s of
+  silence). Three coupled rules in `run_listener` (`core/listener.py`):
+  - **Wake on partials:** in SLEEPING, the first Vosk *partial* containing the
+    wake word transitions to LISTENING and fires the acknowledgement
+    immediately (via `set_state`, which drives the LED/tray off `state_queue`).
+    Once it leaves SLEEPING the branch can't re-fire on later partials of the
+    same utterance, so no guard flag is needed. The SLEEPING-*finalize* branch
+    stays as the fallback for utterances Vosk finalizes with no useful partial.
+  - **Inactivity window:** every non-empty partial in LISTENING resets
+    `command_window_start`, so `command_window` counts silence-since-you-stopped,
+    NOT wall-clock-since-wake. A long multi-segment chain can't fall asleep
+    mid-utterance.
+  - **Wake-only is swallowed; total-miss is one-shot:** a finalized utterance
+    that is nothing but the wake word (`detector.is_wake_only`) is swallowed
+    silently in LISTENING (keep listening). A total miss (`try_match` returns
+    False — nothing matched at all) toasts "No match" ONCE and returns to
+    SLEEPING immediately. A partial-good chain returns True from `try_match`
+    (see "Chains partial-execute") and never reaches this path, so its
+    per-segment toasts are unaffected.
+- **Why:** Pre-fix, feedback waited for finalize, so "Listening…" arrived ~1.5s
+  late or simultaneously with execution. And a no-match used to leave you in
+  LISTENING, so the command-window-expiry path fired a SECOND "No match" — two
+  toasts for one failed attempt. Re-waking is cheap now (acknowledged off a
+  partial), so one-shot is the obvious behavior.
+- **Don't:** Gate wake detection on finalized results only. Make the command
+  window wall-clock again. Toast on a wake-only utterance. Leave LISTENING after
+  a total miss (reintroduces the double "No match"). Assume a partial-good chain
+  reaches the listener's no-match branch — it doesn't.
+
+### Wake-word matching is whole-word, not substring
+- **What:** `WakeWordDetector.check()` (`core/wake.py`) matches each wake word on
+  word boundaries via a precompiled regex per word, `(?<!\w)…(?!\w)`, NOT a raw
+  `w in text` substring. "computer" wakes on "computer" but NOT "computerized".
+  Lookarounds (not `\b`) so a wake word flanked by punctuation or string-edge
+  still matches (`\b` needs a word char on one side — breaks "c++"). `re.escape`
+  makes user-config wake words literal; multi-word phrases ("hey computer") join
+  tokens on `\s+`. `is_wake_only()` removes wake words using the same patterns.
+- **Why:** Substring matching tripped the wake on any longer word embedding the
+  wake word — a real misfire source.
+- **Don't:** Revert to `w in t`. Use `\b` (breaks punctuation-flanked words).
+  Add PySide6/Vosk deps — `core/wake.py` is stdlib-only (`re`) with a pure-logic
+  test suite (`tests/test_wake.py`); keep it that way.

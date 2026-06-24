@@ -8,7 +8,8 @@ passed in here. Mic restarts recreate only the pw-record subprocess and the
 KaldiRecognizer -- the model itself stays in memory.
 
 State machine:
-  SLEEPING   -> LISTENING    wake word heard
+  SLEEPING   -> LISTENING    wake word heard (acknowledged immediately off a
+                             Vosk partial; or at finalize as a fallback)
   LISTENING  -> SLEEPING     command matched OR command window expired
   LISTENING  -> CONFIRMING   dangerous command matched, awaiting "confirm"
   CONFIRMING -> prev state   cancelled (voice or timeout); -> SLEEPING on confirm
@@ -306,15 +307,37 @@ def run_listener(
                 pass
 
         if not rec.AcceptWaveform(data):
-            # Mid-utterance: Vosk has no final text yet. While the user is
-            # actively speaking in LISTENING, keep the command window alive so a
-            # long phrase (e.g. a multi-segment chain) can't fall asleep before
-            # it finishes. This turns command_window into an INACTIVITY timer --
-            # it counts silence since you stopped talking, not wall-clock since
-            # the wake word. OPEN_MIC has no window; SLEEPING has no window and
-            # arrives as one utterance, so this only matters in LISTENING.
-            if context.state == State.LISTENING:
-                partial = json.loads(rec.PartialResult()).get("partial", "").strip()
+            # Mid-utterance: Vosk has no final text yet, but partials stream
+            # live. Two jobs here, both so feedback/timing track *speech*
+            # rather than Vosk's end-of-utterance endpoint (~1.5s of silence):
+            #
+            #  - SLEEPING: the moment a partial contains the wake word,
+            #    acknowledge immediately -- fire "Listening...", light the
+            #    tray/LED via set_state(LISTENING), and start the command
+            #    window -- instead of waiting for the utterance to finalize.
+            #    Once we leave SLEEPING this branch can't re-fire on later
+            #    partials of the same utterance, so no guard flag is needed.
+            #    The wake-bearing finalized text is then handled by the
+            #    LISTENING branch (the matcher tolerates a wake-word prefix;
+            #    a wake-ONLY utterance is swallowed there, see is_wake_only).
+            #  - LISTENING: keep the command window alive while the user is
+            #    still talking, so a long phrase (e.g. a multi-segment chain)
+            #    can't fall asleep before it finishes. This makes
+            #    command_window an INACTIVITY timer (silence since you stopped
+            #    talking), not wall-clock since the wake word.
+            #
+            # OPEN_MIC has no window; CONFIRMING is unaffected.
+            partial = json.loads(rec.PartialResult()).get("partial", "").strip()
+            if context.state == State.SLEEPING:
+                if partial and detector.check(partial):
+                    command_window = commands.get_command_window()
+                    print("[listener] Wake word detected (partial).")
+                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
+                    _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
+                    set_state(State.LISTENING)
+                    command_window_start = now
+                    print("[listener] -> LISTENING (early, off partial)")
+            elif context.state == State.LISTENING:
                 if partial:
                     command_window_start = now
             continue
@@ -356,6 +379,16 @@ def run_listener(
                 print("[listener] -> LISTENING")
 
         elif context.state == State.LISTENING:
+            # We may have entered LISTENING early off a partial wake. If this
+            # finalized utterance is nothing but the wake word ("computer",
+            # then silence), swallow it silently and keep listening for the
+            # real command -- do NOT toast "No match". Refresh the window so
+            # the user gets the full command window from this acknowledgement.
+            if detector.is_wake_only(text):
+                print("[listener] Wake-only utterance, still listening.")
+                command_window_start = now
+                continue
+
             if _is_open_mic_command(text):
                 set_state(State.OPEN_MIC)
                 _notify_general("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
@@ -370,9 +403,16 @@ def run_listener(
                     print("[listener] Command matched, back to sleep.")
                     set_state(State.SLEEPING)
             else:
-                print("[listener] No match.")
+                # Total miss -- nothing in the utterance matched (a partial
+                # chain that matched >=1 segment returns True above and never
+                # reaches here). One-shot: toast once and go straight back to
+                # sleep instead of lingering in LISTENING, which would let the
+                # command-window-expiry path fire a SECOND "No match". Re-waking
+                # is instant now (wake acknowledges off a partial).
+                print("[listener] No match, back to sleep.")
                 _notify_general("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
                 LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match")
+                set_state(State.SLEEPING)
 
         elif context.state == State.CONFIRMING:
             if _is_cancel(text):

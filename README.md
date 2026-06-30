@@ -1,32 +1,110 @@
 # Voice Commander
 
-Offline voice control for KDE Plasma 6 on Wayland. Say a wake word,
-say a command. Launch apps, open URLs, control volume and media,
-fling windows between monitors, run arbitrary shell commands.
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
+![Platform: KDE Plasma 6](https://img.shields.io/badge/platform-KDE%20Plasma%206%20%2F%20Wayland-1d99f3.svg)
+![Speech: Vosk (offline)](https://img.shields.io/badge/speech-Vosk%20(offline)-success.svg)
 
-No cloud. No always-listening daemon phoning home. No telemetry.
-Speech recognition runs locally via [Vosk][vosk]; the wake-word
-detector ignores everything else until it hears its name.
+> Talk to your desktop. Voice Commander turns KDE Plasma into something you
+> can boss around hands-free — no cloud, no subscription, no smart speaker
+> listening in. Just your voice, a tray icon, and KWin doing what it's told.
 
-Voice Commander runs as a `systemd --user` service that restarts on
-failure and bounces cleanly with `systemctl --user restart
-voice-commander`. Starting automatically at login is opt-in &mdash;
-turn it on in Settings &raquo; Options (it's off by default).
+---
+
+## Table of Contents
+
+- [What is Voice Commander?](#what-is-voice-commander)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [The Settings Window](#the-settings-window)
+  - [Commands](#commands)
+  - [Overrides](#overrides)
+  - [Displays](#displays)
+  - [Model](#model)
+  - [Log](#log)
+  - [Options](#options)
+- [Confirming Destructive Commands](#confirming-destructive-commands)
+- [Open Mic Mode](#open-mic-mode)
+- [Optional Hardware: ReSpeaker LED Ring](#optional-hardware-respeaker-led-ring)
+- [Updating](#updating)
+- [Uninstalling](#uninstalling)
+- [Troubleshooting](#troubleshooting)
+- [Known Limitations](#known-limitations)
+- [For Developers](#for-developers)
+- [License](#license)
+
+---
+
+## What is Voice Commander?
+
+Voice Commander is a lightweight, fully offline voice-command daemon for
+KDE Plasma 6 on Wayland. It sits quietly in your system tray, listens for a
+wake word, and when it hears one, listens briefly for a command. Say
+something it recognizes — launch an app, open a URL, nudge the volume, throw
+the active window onto another monitor, even shut the machine down (with a
+confirmation, because it's not a maniac) — and it does the thing.
+
+> **Privacy, by construction, not by policy.** Speech recognition runs
+> entirely on your machine via [Vosk](https://alphacephei.com/vosk/). Nothing
+> you say is ever sent anywhere. The only network call Voice Commander itself
+> ever makes is the one-time speech model download during installation —
+> after that, it works completely offline (commands that explicitly open a
+> URL still need a connection to reach that URL, obviously).
+
+It's built for people who want a voice assistant that behaves like a Unix
+tool: predictable, inspectable, fully configurable in a text file if you want
+to go that route, and not trying to sell you anything.
+
+## Features
+
+- **Fully offline speech recognition** — powered by [Vosk](https://alphacephei.com/vosk/),
+  no API keys, no accounts, no telemetry.
+- **Custom wake words** — one or several, your call.
+- **Forgiving recognition** — a fuzzy matcher tolerates minor mishearings out
+  of the box, and a user-editable override system fixes the words Vosk
+  reliably mangles for *your* voice and mic.
+- **Command chaining** — "open reddit and open youtube" fires both. If one
+  half is misheard, the other still fires, and you're told which part
+  didn't land.
+- **Multi-monitor aware** — name your displays, then target any command at
+  one ("open dolphin on monitor two") or relocate the active window on
+  demand ("move to monitor two").
+- **Confirmation on destructive commands** — shutdown, restart, and logout
+  all require a verbal "confirm" before they execute.
+- **Open Mic mode** — drop the wake-word requirement entirely when you want
+  to fire off several commands back to back.
+- **Fully configurable command set** — launch applications, open URLs or
+  files, or run arbitrary shell commands, all editable from a native Qt
+  settings window. No hand-editing JSON required (but you can, if you'd
+  rather).
+- **System tray with live state feedback** — the icon (and, if you own one,
+  a ReSpeaker LED ring) changes color depending on whether Voice Commander
+  is sleeping, listening, in Open Mic mode, or hit an error.
+- **Hot-reloading config** — edit your commands and save; no restart needed.
+- **Lightweight** — the default small Vosk model uses practically no system
+  resources.
 
 ## Requirements
 
-- **KDE Plasma 6** on a **Wayland session**
-- **Python 3.11+**
-- **Arch- or Debian-based distro** (Arch / CachyOS / Manjaro,
-  Debian 13+ / Kubuntu 24.04+). Others probably work but aren't
-  tested.
-- A working microphone
+| | |
+|---|---|
+| **Desktop** | KDE Plasma 6 on Wayland (the installer gates on `kwriteconfig6`, which ships with Plasma 6) |
+| **Init** | `systemd --user` (the app runs as a user service) |
+| **Python** | 3.11+ |
+| **Distro** | Auto-detected dependency installation on Arch-likes (CachyOS, Manjaro, etc.) and Debian-likes (Debian, Ubuntu, Kubuntu). Other distros: install the binaries below yourself, then run the installer. |
+| **Microphone** | Any device PipeWire can see as a default source |
 
-The installer checks every prerequisite up front and prints the
-exact `pacman` or `apt` command for anything missing &mdash; you'll
-know what's broken before any state changes on your system.
+The installer checks for these system binaries and tells you exactly what to
+install if any are missing: `pactl`, `pw-record`, `playerctl`,
+`kscreen-doctor`, `notify-send`, `kwriteconfig6`, `dbus-send`, `xdg-open`,
+`curl`, `unzip`, `systemctl`.
 
-## Install
+Python dependencies (`vosk`, `PySide6`) are installed automatically into a
+dedicated virtual environment — you don't need to install them yourself.
+
+## Installation
 
 ```bash
 git clone https://github.com/Trixles/Voice-Commander.git
@@ -34,377 +112,320 @@ cd Voice-Commander
 ./install.sh
 ```
 
-What `install.sh` does:
+The installer is entirely userland (no `sudo` required) and:
 
-1. Detects your distro and verifies every required binary is on `PATH`.
-2. Copies the app to `~/.local/share/voice-commander/app/`.
-3. Builds a Python venv at `~/.local/share/voice-commander/venv/`
-   and installs `requirements.txt`.
-4. Downloads the Vosk small-English model (~40 MB) to
-   `~/.local/share/voice-commander/vosk-model/`.
-5. Installs the KWin window-placer helper script.
-6. Generates `~/.config/systemd/user/voice-commander.service`.
-7. Drops a `voice-commander` launcher at `~/.local/bin/` and an
-   application-menu entry so it shows up in your app launcher.
-8. Starts the service (re-installing over a running instance restarts
-   it, so you get the new code immediately). Starting at login is
-   **not** enabled automatically &mdash; it's opt-in via
-   Settings &raquo; Options &raquo; "Launch on login."
+1. Checks prerequisites and offers copy-paste install commands for anything missing.
+2. Copies the application into `~/.local/share/voice-commander/app/` and
+   creates a Python virtual environment alongside it.
+3. Downloads the small Vosk speech model (~40 MB) if it isn't already present.
+4. Installs the `vc-window-placer` KWin script, which powers multi-monitor
+   window routing.
+5. Generates a default `commands.json` on first install (existing configs
+   are never overwritten on re-install).
+6. Installs and starts a `systemd --user` service, plus an app-menu launcher
+   and a `voice-commander` terminal command.
 
-When it finishes, a tray icon appears in your system tray. Say your
-wake word (default: **"computer"**) followed by a command.
+Re-running `./install.sh` any time (to update, for example) is always safe —
+it preserves your configuration and restarts the service to pick up new code.
 
-## First five minutes
+**Launch on login is off by default.** Turn it on from Settings → Options if
+you want Voice Commander to start automatically with your session.
 
-The tray icon colour tells you what state the listener is in:
+**Have a ReSpeaker XVF3800 mic array?** The installer auto-detects it and
+enables LED ring support. If the required udev rule isn't installed yet,
+it prints a one-line `sudo` command to add it — see
+[Optional Hardware](#optional-hardware-respeaker-led-ring).
 
-- **Blue** &mdash; sleeping, listening for the wake word
-- **Green** &mdash; heard the wake word, listening for a command
-- **Red** &mdash; open-mic mode (no wake word needed)
-- **Amber** &mdash; mic isn't ready (USB unplug, suspend, etc.)
+## Quick Start
 
-Right-click the tray icon for the settings dialog. Or say
-"computer, open settings."
+After installing, look for the Voice Commander icon in your system tray.
+Right-click it for Settings, Log, or Quit. Left-click toggles
+[Open Mic mode](#open-mic-mode).
 
-Try a few defaults to verify it's working:
-
-- "computer, open browser"
-- "computer, volume up" / "computer, volume down"
-- "computer, pause" / "computer, resume" &mdash; works with any
-  MPRIS-aware player (Spotify, browsers, mpv, VLC)
-- "computer, open mic" &rarr; say commands without the wake word
-  &rarr; "close mic" when done
-
-## What ships out of the box
-
-22 default commands out of the box (the last two are slot-phrase forms):
-
-| Command          | Phrases                                | What it does                |
-|------------------|----------------------------------------|-----------------------------|
-| Open Browser     | "open browser", "launch browser"       | Launches your browser       |
-| Open Reddit      | "open reddit"                          | Opens reddit.com            |
-| Open ReadMe      | "open readme"                          | Opens this file             |
-| Volume Up        | "volume up", "turn it up"              | +10% volume                 |
-| Volume Down      | "volume down", "turn it down"          | &minus;10% volume           |
-| Mute / Unmute    | "mute", "unmute"                       | Toggles the default sink    |
-| Pause Media      | "pause", "pause media"                 | MPRIS pause                 |
-| Resume Media     | "resume", "play", "resume media"       | MPRIS play                  |
-| Move Window L/R  | "move left", "move right"              | Move to next monitor        |
-| Minimize Window  | "minimize window"                      | Minimizes focused window    |
-| Maximize Window  | "maximize window"                      | Maximizes focused window    |
-| Close Window     | "close window"                         | Closes focused window       |
-| Open Mic         | "open mic", "open microphone"          | Enter open-mic mode         |
-| Close Mic        | "close mic", "close microphone"        | Exit open-mic mode          |
-| Open Settings    | "open settings"                        | Opens this dialog           |
-| Shutdown         | "shut down", "shutdown", "power off"   | (confirmation required)     |
-| Restart          | "restart", "reboot"                    | (confirmation required)     |
-| Logout           | "log out", "logout"                    | (confirmation required)     |
-| Set Volume       | "set volume to {level}"                | Slot &mdash; specific level |
-| Move to Alias    | "move to {alias}"                      | Slot &mdash; named monitor  |
-
-Wake words default to **"computer"** and **"hey dude"**. Add your
-own in settings.
-
-## The settings dialog
-
-Right-click tray &rarr; Settings. Six tabs:
-
-1. **Commands** &mdash; the main UI. Add, edit, delete commands. Each
-   one has a display name, an action, one or more trigger phrases,
-   and any action-specific arguments. The wake word field sits at the
-   top of this tab. Two commands can't share an exact trigger phrase
-   &mdash; Save refuses and names the conflict if they do (otherwise
-   only the first would ever fire).
-2. **Overrides** &mdash; pre-match string rewrites that fix consistent
-   Vosk mishearings. See "Fixing mishearings" below.
-3. **Displays** &mdash; per-monitor aliases. So you can say "move to
-   TV" instead of "move to HDMI-A-2." Friendly monitor names come
-   from EDID where available (parsed via `edid-decode`), with the
-   port name as fallback.
-4. **Model** &mdash; path to the Vosk model. Leave the default unless
-   you've downloaded a different one.
-5. **Log** &mdash; live tail of the listener, colour-coded by
-   category. Indispensable for figuring out what Vosk is *actually*
-   hearing when a command doesn't fire.
-6. **Options** &mdash; app settings: **Launch on login** (opt-in
-   autostart), **Enable notifications** (a single on/off toggle for
-   desktop notifications &mdash; the shutdown/restart/logout
-   confirmation prompts always appear regardless), and **Recognition
-   strictness** (how closely speech must match a phrase, default 0.75).
-   The first-time-user **About** reference now lives here as a
-   subsection.
-
-The phrases that enter and leave open-mic mode are now the **Open mic**
-and **Close mic** system commands on the Commands tab (left-clicking the
-tray icon toggles it too).
-
-The bottom bar has **Save**, **Restore Defaults**, and **Exit**.
-Save is dirty-tracked &mdash; it stays disabled until you've actually
-changed something. Restore Defaults is per-tab; it resets only the
-active tab and skips tabs that have no defaults (Model, Log).
-
-Most edits hot-reload without a service restart. Two settings need a
-restart to take effect: wake words and the Vosk model path (both are
-loaded at startup). When those change, Voice Commander handles the
-restart for you on Save &mdash; nothing for you to do.
-
-## Wake words and open-mic mode
-
-After Voice Commander hears a wake word, it listens for a command for
-the next 5 seconds (configurable). If nothing matches, it goes back
-to sleep.
-
-For a hands-free session, say "computer, open mic" and Voice
-Commander matches every command against your set until you say
-"close mic." Useful when you're stringing many commands together
-without wanting to repeat the wake word every time.
-
-The wake word detector accepts multiple wake words simultaneously
-&mdash; "computer" and "hey dude" both work out of the box.
-
-## Slot phrases
-
-Slots let one command match many inputs. The default set includes
-two:
-
-- **`set volume to {level}`** matches "set volume to fifty",
-  "set it to twenty," and so on. The number-word in the slot is
-  resolved to a percentage.
-- **`move to {alias}`** matches the alias against your configured
-  monitor aliases.
-
-You can write your own slot phrases. Curly-brace tokens get
-fuzzy-matched against the slot's value pool. Trailing slots use
-greedy regex (eat to end-of-line); mid-phrase slots use lazy
-matching (eat as little as possible).
-
-## Command chaining
-
-You can stack commands in one breath:
+The default wake words are **"computer"** and **"hey dude."** Try:
 
 ```
-computer, open reddit and open youtube
+"Computer, open browser."
+"Computer, open reddit."
+"Computer, volume up."
+"Computer, open browser on monitor two."
+"Computer, shut down."
+  → "Shutdown command received. Say 'confirm', 'yes', or 'do it' to proceed."
+"Confirm."
 ```
 
-The split is deliberately aggressive &mdash; Voice Commander
-splits on `" and "`, `" an "`, and `" in "` &mdash; because Vosk
-routinely transcribes "and" as one of those. The false-positive
-defense is that *every* segment of a candidate chain has to match
-an existing command. If even one segment doesn't, the whole chain
-is rejected and the matcher falls through to normal (non-chained)
-handling.
+Three example commands ship out of the box so there's something to say on
+first run — **Open Browser**, **Open Reddit** (the *old* design, obviously —
+see [Commands](#commands) if you'd like to fight about it), and
+**Open ReadMe** (opens this file). All three are ordinary user commands:
+rename them, repoint them, or delete them entirely from the Commands tab.
 
-Chains also support a trailing target that distributes across all
-segments:
+## How It Works
 
-```
-computer, open reddit and open youtube on TV
-```
+Voice Commander runs a small state machine, driven entirely by what it hears:
 
-&rarr; both URLs open on the monitor aliased to "TV." If different
-segments name *different* monitors, the chain is rejected entirely
-rather than fired with unpredictable results.
+1. **Sleeping.** It's listening for a wake word, and nothing else. The
+   moment it hears one — even mid-sentence, off a live partial transcript,
+   so you don't have to wait for a pause — it wakes up immediately.
+2. **Listening.** A short command window opens (5 seconds by default, and it
+   resets every time you're still talking, so a long multi-part command
+   never gets cut off mid-sentence). Say a command.
+3. **Matching.** What was heard is first run through the
+   [override list](#overrides) — deterministic find-and-replace fixes for
+   words your mic/voice reliably confuses Vosk on — and *then* fuzzy-matched
+   against every command phrase you've configured. A close-but-imperfect
+   match still fires; an unrelated phrase doesn't, even if it happens to
+   share a word with a real command.
+4. **Dispatch.** A match runs the corresponding action and shows a brief
+   notification confirming what happened. No match gets a "No match" toast,
+   and Voice Commander goes straight back to sleep — no second failed
+   attempt, no hanging around waiting.
 
-## Fixing Vosk mishearings (Overrides)
+You can chain multiple commands in one breath — *"open reddit and open
+youtube"* fires both. If part of a chain is misheard, the rest still fires;
+you'll just get a heads-up about the part that didn't.
 
-Vosk's small model is fast and offline, but it mishears predictably.
-If it consistently transcribes "cause" when you say "close," you have
-two ways to fix it:
+Every recognized phrase, match, and dispatch is recorded in the
+[Log tab](#log), so you can always see exactly what Voice Commander heard —
+which, with Vosk, is sometimes unintentionally hilarious.
 
-1. **Add the mishearing as an alternate phrase** on the affected
-   command (Settings &raquo; Commands &raquo; that command's Options).
-   Right for one-off mishearings on a single command.
-2. **Add an override rule** in Settings &raquo; Overrides. Right when
-   the mishearing affects many commands at once &mdash; e.g. "cause"
-   &rarr; "close" fires *before* any command sees the word, so it
-   fixes every command that uses "close" in one shot.
+## The Settings Window
 
-Override rules are plain whole-word string rewrites. A rule for "in"
-won't corrupt "open." Replacements can be empty for filler-word
-deletion. Rules apply in list order; first match wins per overlapping
-pattern.
+Right-click the tray icon and choose **Settings** (or say *"open voice
+commander settings"*). Everything is editable here — nothing requires
+hand-editing config files, though `~/.config/voice-commander/commands.json`
+is plain JSON if you'd rather.
 
-Six defaults ship locked (visible but uneditable):
+| Tab | What it's for |
+|---|---|
+| [Commands](#commands) | Wake words, plus every command — yours and the built-ins. |
+| [Overrides](#overrides) | Fixes for words Vosk consistently mishears. |
+| [Displays](#displays) | Name your monitors so you can target them by voice. |
+| [Model](#model) | Choose which Vosk speech model to use. |
+| [Log](#log) | Live transcript of everything heard and matched. |
+| [Options](#options) | Launch on login, notifications, recognition strictness. |
 
-- "moved to" &rarr; "move to"
-- "up and" / "hope in" / "oh been" &rarr; "open"
-- "cause" &rarr; "close"
-- "mike" &rarr; "mic"
+### Commands
 
-Your own rules sit above the defaults and run first.
+This is the heart of the app, split into two sections:
 
-## Confirmation flow
+**User Commands** are yours. Click **Add Command**, give it a name, pick an
+action, and set the phrase(s) that trigger it. Four action types are
+available:
 
-Destructive commands (shutdown, restart, logout) don't fire on the
-trigger phrase alone. Voice Commander prompts and waits for one of:
+| Action | Does |
+|---|---|
+| **Launch App** | Runs an installed application, picked from a searchable app list. |
+| **Open URL** | Opens a web address, optionally in a specific browser. |
+| **Open File** | Opens any file, script, or `.desktop` entry — anything `xdg-open` understands. |
+| **Run Command** | Runs an arbitrary shell command. Yes, you can wire up literally anything from here. |
 
-- **Confirm:** "confirm", "yes", "do it"
-- **Cancel:** "cancel", "never mind", "abort"
+Commands can be executed on a specific display by appending *"on
+{alias}"* to the command phrase — e.g. *"open dolphin on monitor 3."*
+Monitor aliases are set on the [Displays](#displays) tab.
 
-After 5 seconds with no response, the command cancels itself.
+**System Commands** are the built-ins: mic toggling, window management,
+volume, media playback, and power controls. Their names and actions are
+fixed, but every phrase is editable, and each one can be toggled on or off
+individually:
 
-## Multi-monitor
+| Category | Commands |
+|---|---|
+| Mic | Open mic, Close mic |
+| Window | Move left, move right, minimize, maximize, close, move to *{alias}* |
+| Volume | Volume up, volume down, mute, unmute, set volume to *{level}* |
+| Media | Pause, resume |
+| Power | Shut down, restart, log out *(all require [confirmation](#confirming-destructive-commands))* |
+| Settings | Open Voice Commander settings |
 
-Monitor placement is handled in two layers, because moving an open
-window and placing a new one need different mechanisms in Plasma:
+A disabled command isn't deleted — it's still recognized, but instead of
+firing, you get a quick "disabled in Settings" notification, so you always
+know *why* nothing happened instead of just getting silence.
 
-1. **Moving an open window** uses KDE's built-in "Window to Screen N"
-   shortcut. Voice Commander invokes the shortcut by *name* over
-   `org.kde.kglobalaccel`. Each "Window to Screen N" shortcut you
-   want to use needs an active keybinding in System Settings &raquo;
-   Shortcuts &raquo; KWin. The key combo itself can be anything; only
-   the name matters &mdash; but the binding has to exist.
-2. **Opening a new window on a specific monitor** uses a KWin helper
-   script (`vc-window-placer`) installed at
-   `~/.local/share/kwin/scripts/`. Voice Commander writes the target
-   output into `kwinrc` and reloads the script via D-Bus
-   (`Scripting.unloadScript` then `loadScript`).
+### Overrides
 
-That reload dance is unusual but necessary: in Plasma 6,
-`org.kde.KWin.reconfigure` only refreshes KWin's *own* configuration.
-It does **not** re-execute user scripts. A full unload/load cycle is
-the only way to make sure the placer sees the value you just wrote.
+Vosk is good, not psychic. Certain words get misheard the same way, every
+time, for a given mic and voice — Overrides are how you fix that for good,
+as a simple "Vosk heard X, I meant Y" rewrite applied *before* matching even
+starts.
 
-## ReSpeaker XVF3800 (optional)
+Built-in overrides cover common mishearings relevant to Voice Commander.
+They can be toggled on or off, but not edited or deleted. Shipped defaults
+include things like correcting "cause" to "close" and "mike" to "mic."
 
-If you're using a ReSpeaker XVF3800 mic array, Voice Commander will
-drive its LED ring to reflect listener state &mdash; the colour
-follows the tray-icon colour. The installer auto-detects the
-`xvf_host` binary and enables LED support if present; absence is
-fine and disables the feature silently.
+Add your own under **User Overrides**: a pattern (what Vosk tends to hear)
+and a replacement (what you meant). Matching is whole-word, so a rule for
+"in" won't corrupt "open" or "spin." If you notice a word getting
+consistently misheard, check the [Log tab](#log) to see exactly what Vosk
+transcribed, then add an override for it.
 
-## CLI
+### Displays
+
+Connected displays are detected automatically. Click the **Aliases** button
+on a display to give it one or more voice-friendly names (defaults like
+"monitor one," "monitor two" are seeded automatically).
+
+Once a display has an alias, you can:
+
+- **Target a command at it**, by appending *"on {alias}"* to any command
+  phrase — *"open dolphin on monitor three."*
+- **Relocate the active window to it**, by saying *"move to {alias}."*
+
+Other window controls live here too — *"move left,"* *"move right,"*
+*"minimize window,"* *"maximize window,"* and *"close window"* — though
+those are edited as ordinary [System Commands](#commands), not on this tab.
+
+### Model
+
+Voice interpretation is powered by [Vosk](https://alphacephei.com/vosk/).
+The default small English model is recommended — it's not as accurate as
+the larger models, but it's generally good enough and uses practically zero
+system resources. If you want more accuracy and don't mind the extra disk
+and memory footprint, download a
+[larger model](https://alphacephei.com/vosk/models) and point this tab at
+it. Changing models requires a service restart, which the settings window
+will tell you about when you save.
+
+### Log
+
+Tracks wake word and command activation, and shows exactly what is heard by
+the interpreter (which is sometimes unintentionally hilarious). If a certain
+word or phrase is being consistently misheard, you can create an
+[override](#overrides) for it.
+
+### Options
+
+Three app-wide settings, plus an About blurb:
+
+- **Launch on login** — off by default. Toggle on to have Voice Commander
+  start automatically with your session.
+- **Enable notifications** — a blanket on/off switch for desktop
+  notifications. Confirmation prompts for shutdown, restart, and logout
+  *always* appear regardless of this setting — you should never be able to
+  confirm a destructive action blind.
+- **Recognition strictness** — how closely what you say has to match a
+  command phrase to fire it. Defaults to a sane middle ground; the slider
+  goes all the way to either extreme if you want to live dangerously, with
+  a clear warning attached. Lower is looser (more misfires); higher is
+  stricter (commands may stop registering).
+
+## Confirming Destructive Commands
+
+Shutdown, restart, and logout all require a spoken confirmation before they
+execute — Voice Commander will never power off your machine because it
+misheard something. Trigger one of these and you'll get a notification with
+a five-second window:
+
+- Say **"confirm," "yes,"** or **"do it"** to proceed.
+- Say **"cancel," "never mind,"** or **"abort"** to back out.
+- Say nothing, and it cancels itself automatically when the window expires.
+
+This prompt always fires, even with notifications turned off in
+[Options](#options) — there's no setting that lets you confirm a destructive
+command blind.
+
+## Open Mic Mode
+
+Normally you need to say a wake word before every command. Open Mic mode
+skips that — useful when you're about to issue several commands in a row and
+don't want to repeat "computer" each time.
+
+Toggle it by left-clicking the tray icon, or with the voice commands *"open
+mic"* / *"close mic"* (phrases editable under [System Commands](#commands)).
+The tray icon and notifications make it obvious when Open Mic is active, so
+you won't forget it's on.
+
+## Optional Hardware: ReSpeaker LED Ring
+
+If you have a Seeed Studio ReSpeaker XVF3800 USB mic array, Voice Commander
+will drive its LED ring to match the tray icon's state — sleeping, listening,
+open mic, and error each get their own color. This is entirely optional and
+auto-detected; without the hardware, it's simply a no-op.
+
+The installer detects `xvf_host` automatically. Controlling the device's LED
+requires a udev rule granting write access, which the installer can't install
+itself (that would require `sudo`, and the installer is intentionally
+userland-only). If the rule is missing, `install.sh` prints the exact
+copy-paste command to add it. You can run it any time — install continues
+fine without it, and LED control kicks in as soon as the rule's in place and
+the device is replugged.
+
+## Updating
 
 ```bash
-voice-commander --version    # or -V
-voice-commander              # run in the foreground (rare; systemd handles this)
-```
-
-`--version` answers without loading Qt or the Vosk model, so it
-returns instantly.
-
-## Common operations
-
-```bash
-# Status
-systemctl --user status voice-commander
-
-# Follow logs
-journalctl --user -u voice-commander -f
-
-# Restart (e.g. after editing code or config that doesn't hot-reload)
-systemctl --user restart voice-commander
-
-# Stop temporarily
-systemctl --user stop voice-commander
-
-# Re-run installer (safe; preserves your commands.json)
+cd Voice-Commander
+git pull
 ./install.sh
+```
 
-# Uninstall (preserves config)
+Re-running the installer updates the application code and restarts the
+service. Your `commands.json` is never touched.
+
+## Uninstalling
+
+```bash
 ./uninstall.sh
+```
 
-# Uninstall everything including config
+Removes the systemd service, launcher, app-menu entry, application code, and
+the KWin placer script. Your `commands.json` is preserved by default. To
+remove it too:
+
+```bash
 ./uninstall.sh --purge
 ```
 
-## Configuration file
-
-User config lives at `~/.config/voice-commander/commands.json`. The
-settings dialog is the supported way to edit it &mdash; direct edits
-work, but they're unvalidated, so one bad comma and you're debugging
-JSON.
-
-The file is hot-reloaded on write, so most edits take effect without
-a service restart.
-
-## Security
-
-The `run_command` action runs arbitrary shell commands. **Voice
-commands you configure to use `run_command` have your full shell
-privileges.** A voice command set up to run `rm -rf ~/` will in fact
-`rm -rf ~/` if it fires.
-
-This is deliberate. Voice Commander assumes you can be trusted with
-your own system, the same way `cron` and your `~/.bashrc` do.
-Treat `run_command` voice commands the same way you'd treat any
-script you're about to execute &mdash; check the args, especially
-when copying from other people's configurations.
-
-## Known issues
-
-- **Firefox-derivatives ignore monitor placement on launch.**
-  Firefox, Waterfox, and LibreWolf restore their *own* remembered
-  window geometry on startup, overriding KWin's placement
-  instruction. Workaround: open the browser first, then say "move
-  to {monitor}" to relocate the already-open window. Not specific to
-  Voice Commander; affects any tool trying to place these browsers.
-
 ## Troubleshooting
 
-**Tray icon doesn't appear.** Service probably isn't running. Check
-`systemctl --user status voice-commander` and the last lines of
-`journalctl --user -u voice-commander -n 50`.
-
-**Wake word not being detected.** Open Settings &raquo; Log and watch
-what Vosk transcribes when you say it. The small model can hear
-"computer" as "compute her," "computers," "the computer," etc. Two
-fixes: add the common mishearings as alternate wake words, or as
-override rules that rewrite them back to "computer."
-
-**"Move to monitor X" doesn't move anything.** System Settings &raquo;
-Shortcuts &raquo; KWin needs an active keybinding for each "Window
-to Screen N" shortcut you want to use. Voice Commander triggers the
-shortcut by name, so the actual key combo can be anything &mdash; but
-the binding has to be set.
-
-**Newly-opened windows land on the wrong monitor.** Open the Log
-tab and check the "Target monitor" line for that command &mdash;
-that's the value Voice Commander resolved from your speech. If it's
-wrong, the issue is on the recognition side (alias mishearing); add
-an override or alternate phrase. If it's right but the window still
-lands wrong, you may have hit the Firefox-derivative limitation
-above.
-
-**Mic stops working.** Voice Commander auto-detects mic changes and
-restarts the audio pipeline. If the tray icon goes amber and stays
-there, your default source isn't producing data. Check
-`pactl get-default-source` and `pactl list sources short` to confirm
-the source exists and is usable.
-
-## Developing
-
+**No tray icon / service won't start**
 ```bash
-# Run the test suite (Qt / Vosk / subprocess-free)
-pytest -q
+systemctl --user status voice-commander
+journalctl --user -u voice-commander -f
 ```
 
-The tests live under `tests/` (matcher pipeline, duplicate-phrase
-detection, config getters, and a Qt settings round-trip). The matcher
-tests hook the pipeline via `monkeypatch` and assert on what
-`_dispatch` would have been called with, so chain logic, slot
-extraction, and tail-rescore behaviour are observable without spinning
-up the GUI.
+**Wake word not triggering, or commands misfiring** — Open the
+[Log tab](#log) and watch what's actually being transcribed while you talk.
+If a specific word is consistently wrong, add an [override](#overrides) for
+it. If recognition feels generally too loose or too strict, adjust
+**Recognition strictness** in [Options](#options).
 
-To test code changes against your running setup, edit the repo and
-re-run `./install.sh`. The installer is idempotent, preserves your
-`commands.json`, and restarts the running service so you get the new
-code immediately. Editing the deployed copy directly under
-`~/.local/share/voice-commander/app/` works too but it diverges from
-the repo &mdash; not recommended.
+**Commands route to the wrong monitor, or don't move at all** — Confirm the
+monitor has an alias set on the [Displays](#displays) tab, and that you're
+on KDE Plasma 6 (multi-monitor routing depends on the `vc-window-placer`
+KWin script, which only installs on Plasma 6).
 
-Architecture and design invariants live in `ARCHITECTURE.md`.
+**`voice-commander` command not found in a terminal** — `~/.local/bin` isn't
+on your `PATH`. Add it in your shell config (`~/.bashrc`, `~/.zshrc`, etc.).
+
+**ReSpeaker LED isn't changing** — See
+[Optional Hardware](#optional-hardware-respeaker-led-ring); you likely need
+the udev rule.
+
+## Known Limitations
+
+- **Chained commands that open URLs on two *different* monitors are
+  rejected**, rather than risk firing wrong. The browser may reuse an
+  existing window, open a new one, or open new tabs depending on its
+  current state — there's no reliable way to predict which, so this case is
+  refused outright rather than silently doing the wrong thing. Chaining
+  multiple URLs to the *same* monitor (or leaving them untargeted) works
+  fine.
+- **Command phrases can't start with "the."** A leading "the " is silently
+  stripped before matching, because some mics with onboard noise processing
+  (the ReSpeaker XVF3800 included) occasionally hallucinate it from
+  background noise.
+
+## For Developers
+
+This README covers using Voice Commander. If you're looking at the code:
+
+- **`ARCHITECTURE.md`** documents the durable design invariants — the *why*
+  behind non-obvious decisions in the matching pipeline, the settings UI,
+  and the KWin integration.
+- **`CHANGELOG.md`** has the full version history.
+
+Contributions, issues, and forks are welcome under the license below.
 
 ## License
 
-[MIT](LICENSE).
-
-## Acknowledgements
-
-- [Vosk][vosk] for offline speech recognition that actually works.
-- [PySide6][pyside] for the Qt bindings.
-- The KDE Plasma 6 team for the D-Bus and KWin scripting surfaces
-  that make this kind of thing possible.
-
-[vosk]:   https://alphacephei.com/vosk/
-[pyside]: https://wiki.qt.io/Qt_for_Python
+[MIT](LICENSE) — do what you want with it.

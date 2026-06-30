@@ -46,6 +46,28 @@ if (raw) {
 }
 print("[vc-window-placer] Queue loaded: " + JSON.stringify(_queue));
 
+// One-shot: move the CURRENTLY ACTIVE window to a named output. Voice Commander
+// writes [Script-vc-window-placer] moveActive=<output> and reloads this script;
+// "move to {alias}" uses this instead of KWin's numeric "Window to Screen N"
+// shortcut. Resolving the screen by NAME against workspace.screens means it
+// survives KWin's screen numbering and monitor hotplugs. Runs immediately on
+// reload (not on windowAdded) because the target window already exists.
+var moveActive = readConfig("moveActive", "").trim();
+if (moveActive) {
+    var active = workspace.activeWindow;
+    var dest = workspace.screens.find(function(screen) {
+        return screen.name === moveActive;
+    });
+    if (active && dest) {
+        print("[vc-window-placer] moveActive: '" + active.caption +
+              "' -> " + moveActive);
+        workspace.sendClientToScreen(active, dest);
+    } else {
+        print("[vc-window-placer] moveActive='" + moveActive + "' ignored: " +
+              (active ? "no screen named that" : "no active window"));
+    }
+}
+
 // Register the windowAdded handler ONCE across the lifetime of this script's
 // JS engine instance. Defensive guard: each loadScript invocation creates a
 // fresh engine, so this always passes -- but the guard costs nothing and

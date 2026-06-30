@@ -460,13 +460,24 @@ companion — keep them in sync.
 - **Don't:** Revert to bare-output queue entries. Drop the
   empty-tag-matches-anything escape hatch.
 
-### `move_to_X` and `open_on_X` use different KWin APIs
-- **What:** `move_window_to_monitor` resolves alias → output name →
-  KWin screen *index*, fires `Window to Screen N` global shortcut.
-  `open … on X` (placer path) writes the output *name* to `kwinrc`;
-  KWin script matches by name → `sendClientToScreen`.
-- **Don't:** Assume one working proves the other works. Test both
-  when changing anything monitor-related.
+### `move_to_X` and `open_on_X` both place by output NAME via the placer
+- **What:** Both monitor-routing paths resolve an alias to an output
+  *name* and let the vc-window-placer call `sendClientToScreen` against
+  KWin's live, name-keyed `workspace.screens`. They differ only in the
+  signal: `open … on X` queues `nextScreen` for the next ARRIVING window;
+  `move to {alias}` writes `moveActive` to move the CURRENTLY ACTIVE
+  window immediately on reload. `_signal_placer` writes one key and clears
+  the other, so exactly one signal is live per reload.
+- **Why:** KWin screen *indices* (derived from kscreen-doctor output
+  numbers) are neither KWin's own numbering nor stable across monitor
+  hotplugs — the old `move` path's `Window to Screen N` shortcut sent
+  windows to the wrong monitor. Name resolution against the live screen
+  list is correct and hotplug-proof.
+- **Don't:** Reintroduce screen-index / `Window to Screen N` routing for
+  moves. Let both placer keys be live at once (a stale `nextScreen`
+  hijacks a later-opened window; a stale `moveActive` re-flings the active
+  one). Assume one path working proves the other — test both when
+  changing anything monitor-related.
 
 ### Chains partial-execute; rule rejections abort wholesale
 - **What:** `_match_chain_segments` scores each segment into one of
@@ -662,3 +673,15 @@ companion — keep them in sync.
 - **Don't:** Revert to `w in t`. Use `\b` (breaks punctuation-flanked words).
   Add PySide6/Vosk deps — `core/wake.py` is stdlib-only (`re`) with a pure-logic
   test suite (`tests/test_wake.py`); keep it that way.
+
+### Verification gauntlet
+
+- **What:** Before a deploy or commit, run the health check as one line:
+  ```
+  python -m pytest -q && python -m compileall -q core && python -m core.commands --emit-defaults >/dev/null 2>/dev/null && echo "✅ green"
+  ```
+  pytest = logic regressions; `compileall` = every `.py` parses (catches breakage
+  in files no test imports, e.g. a GUI tab); `--emit-defaults` = the Qt-free config
+  path still works (canary for the `core/aliases.py` Qt-free invariant).
+- **Don't:** Pipe `--emit-defaults` with `2>&1` — merging the STDERR info line into
+  STDOUT poisons the JSON. Use `2>/dev/null`.

@@ -4,22 +4,30 @@ core/actions/windows.py
 KWin window management actions.
 
 move_window_to_monitor resolves a raw alias string (e.g. "monkey") against
-the monitors block in commands.json, maps it to a KWin screen index, and
-invokes the "Window to Screen N" shortcut via kglobalaccel.
+the monitors block in commands.json to an OUTPUT NAME, then signals the
+vc-window-placer to move the active window there. The placer calls KWin's
+`sendClientToScreen` against the live, name-keyed screen list -- the SAME
+name-based mechanism the "open X on [alias]" path uses.
 
-Alias resolution:
+Alias resolution (move path):
   1. Load the monitors block from commands.json.
   2. Fuzzy-match the raw alias against every alias in every output's list.
-  3. Map the winning output name to its KWin screen index via the cached
-     _output_to_screen map (built from kscreen-doctor at startup).
-  4. Fire invokeShortcut.
+  3. Signal the placer with the winning output NAME (_signal_placer
+     "moveActive"); the placer resolves the screen by name on reload.
 
-The output-to-screen mapping is built once at startup by refresh_monitor_map()
-and refreshed on every config hot-reload. This avoids calling kscreen-doctor
-on every monitor-move command.
+No KWin screen index is involved in the move path. This is deliberate:
+kscreen-doctor's output numbers are neither KWin screen indices nor stable
+across hotplugs, so the old index-based "Window to Screen N" shortcut sent
+windows to the wrong display. Routing by name survives both KWin's screen
+numbering and monitor hotplugs.
 
-close_window uses invokeShortcut "Window Close" via kglobalaccel -- same
-pattern as the screen-move shortcuts.
+The _output_to_screen index map (built by refresh_monitor_map() at startup
+and on every config hot-reload) is retained only for the settings UI's
+output list -- runtime move/open routing no longer depends on it.
+
+close_window, minimize_window, maximize_window, and the left/right moves use
+invokeShortcut via kglobalaccel -- a separate, simpler by-name shortcut path
+that has no screen-index dependency.
 """
 
 import json
@@ -119,85 +127,85 @@ def get_monitor_details() -> dict[str, str]:
     return dict(_monitor_details)
 
 
-def write_next_screen(output_name: str, gui_env: dict) -> None:
+# The placer reads its signals from this kwinrc group. Two keys it watches:
+#   nextScreen -- queue outputs for ARRIVING windows ("open X on [alias]")
+#   moveActive -- move the CURRENTLY ACTIVE window now ("move to [alias]")
+_PLACER_GROUP = "Script-vc-window-placer"
+_PLACER_KEYS = ("nextScreen", "moveActive")
+
+
+def _signal_placer(active_key: str, value: str, gui_env: dict) -> None:
     """
-    Signal the vc-window-placer KWin script to move the next new normal window
-    to `output_name`. Writes via kwriteconfig6 into kwinrc, then forces KWin
-    to re-execute the placer script via unloadScript / loadScript / start on
-    the Scripting DBus interface.
+    Write `active_key=value` into kwinrc's placer group, clear the OTHER placer
+    key, then force KWin to re-execute the placer script via unloadScript /
+    loadScript / start on the Scripting DBus interface.
+
+    Clearing the complementary key keeps exactly ONE signal live per reload: a
+    stale `nextScreen` entry must never hijack a later-opened window, and a
+    stale `moveActive` must never re-fling the active window on the next
+    placement reload.
 
     KWin's `org.kde.KWin.reconfigure` does NOT re-execute user scripts -- only
-    the Scripting interface does. `loadScript` reads kwinrc fresh on each
-    invocation, so no reconfigure is needed between the kwriteconfig6 write
-    and the reload. `unloadScript` first prevents the script's windowAdded
-    handler from stacking across calls.
-
-    Pass empty string to clear the signal after dispatch.
+    the Scripting interface does. `loadScript` reads kwinrc fresh each call, so
+    no reconfigure is needed. `unloadScript` first stops the windowAdded handler
+    from stacking across calls.
     """
     placer_id = "vc-window-placer"
     placer_path = os.path.expanduser(
         "~/.local/share/kwin/scripts/vc-window-placer/contents/code/main.js"
     )
+    kwinrc = os.path.expanduser("~/.config/kwinrc")
 
     try:
-        result = run_capture(
-            [
-                "kwriteconfig6",
-                "--file", os.path.expanduser("~/.config/kwinrc"),
-                "--group", "Script-vc-window-placer",
-                "--key", "nextScreen",
-                output_name,
-            ],
-            env=gui_env,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"kwriteconfig6 exited {result.returncode}: {result.stderr.strip()}"
+        for key in _PLACER_KEYS:
+            result = run_capture(
+                [
+                    "kwriteconfig6", "--file", kwinrc,
+                    "--group", _PLACER_GROUP,
+                    "--key", key,
+                    value if key == active_key else "",
+                ],
+                env=gui_env,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"kwriteconfig6 exited {result.returncode}: {result.stderr.strip()}"
+                )
+
+        for tail in (
+            ("org.kde.kwin.Scripting.unloadScript", f"string:{placer_id}"),
+            ("org.kde.kwin.Scripting.loadScript",
+             f"string:{placer_path}", f"string:{placer_id}"),
+            ("org.kde.kwin.Scripting.start",),
+        ):
+            run_capture(
+                ["dbus-send", "--session", "--print-reply",
+                 "--dest=org.kde.KWin", "/Scripting", *tail],
+                env=gui_env,
             )
 
-        run_capture(
-            [
-                "dbus-send", "--session", "--print-reply",
-                "--dest=org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting.unloadScript",
-                f"string:{placer_id}",
-            ],
-            env=gui_env,
-        )
-        run_capture(
-            [
-                "dbus-send", "--session", "--print-reply",
-                "--dest=org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting.loadScript",
-                f"string:{placer_path}",
-                f"string:{placer_id}",
-            ],
-            env=gui_env,
-        )
-        run_capture(
-            [
-                "dbus-send", "--session", "--print-reply",
-                "--dest=org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting.start",
-            ],
-            env=gui_env,
-        )
-
-        if output_name:
-            print(f"[windows] Set next-screen signal: {output_name}")
-        else:
-            print("[windows] Cleared next-screen signal")
+        print(f"[windows] Placer signal: {active_key}={value!r}")
     except Exception as e:
-        print(f"[windows] write_next_screen failed: {e}")
+        print(f"[windows] _signal_placer failed: {e}")
 
 
-def _resolve_monitor(raw: str) -> tuple[str, int]:
+def write_next_screen(output_name: str, gui_env: dict) -> None:
+    """Queue `output_name` for the next ARRIVING normal window ("open X on
+    [alias]"). Thin wrapper over _signal_placer; pass "" to clear the queue."""
+    _signal_placer("nextScreen", output_name, gui_env)
+
+
+def _resolve_output_alias(raw: str) -> str:
     """
     Fuzzy-match `raw` (what Vosk heard) against all aliases in the monitors
-    block of commands.json. Returns (output_name, kwin_screen_index).
+    block of commands.json and return the best-scoring OUTPUT NAME.
 
-    Raises ValueError if no monitors block exists, no alias scores >= 0.5,
-    or the output has no entry in the cached monitor map.
+    Name-only by design: it deliberately does NOT consult the cached
+    `_output_to_screen` index map. The move path hands this name to KWin, which
+    resolves the live screen by name -- so a stale or reshuffled index can't
+    send the window astray (that was the "move to [alias]" bug).
+
+    Raises ValueError if there is no monitors block or nothing scores >= 0.5.
     """
     with open(CONFIG_PATH, "r") as f:
         config = json.load(f)
@@ -221,41 +229,28 @@ def _resolve_monitor(raw: str) -> tuple[str, int]:
             f"No monitor alias matched '{raw}' (best score {best_score:.2f})"
         )
 
-    screen_index = _output_to_screen.get(best_output)
-    if screen_index is None:
-        raise ValueError(
-            f"Output '{best_output}' not found in monitor map. "
-            f"Known outputs: {list(_output_to_screen.keys())}"
-        )
-
-    print(f"[windows] '{raw}' -> '{best_output}' (score {best_score:.2f}) -> Screen {screen_index}")
-    return best_output, screen_index
+    print(f"[windows] '{raw}' -> '{best_output}' (score {best_score:.2f})")
+    return best_output
 
 
 def move_window_to_monitor(alias: str, gui_env: dict, context=None) -> None:
     """
-    Move the active window to the monitor matching `alias` (raw alias from Vosk).
-    Resolves alias -> output name -> KWin screen index, then invokes the
-    'Window to Screen N' shortcut via kglobalaccel.
+    Move the active window to the monitor whose alias matches `alias`.
+
+    Resolves the alias to an OUTPUT NAME, then signals the vc-window-placer to
+    move the active window there. The placer calls `sendClientToScreen` against
+    KWin's live, name-keyed screen list -- the same name-based mechanism the
+    "on [alias]" path uses. No KWin screen index is involved, so it survives
+    both KWin's screen numbering AND monitor hotplugs (the old index path did
+    not -- kscreen-doctor output numbers are neither KWin indices nor stable).
     """
     try:
-        output_name, screen_index = _resolve_monitor(alias)
+        output_name = _resolve_output_alias(alias)
     except ValueError as e:
         print(f"[windows] move_window_to_monitor failed: {e}")
         return
 
-    shortcut_name = f"Window to Screen {screen_index}"
-
-    run_bg(
-        [
-            "dbus-send", "--session", "--print-reply",
-            "--dest=org.kde.kglobalaccel",
-            "/component/kwin",
-            "org.kde.kglobalaccel.Component.invokeShortcut",
-            f"string:{shortcut_name}",
-        ],
-        env=gui_env,
-    )
+    _signal_placer("moveActive", output_name, gui_env)
 
     if context:
         context.update(last_command_name="move_window_to_monitor", last_monitor=output_name)

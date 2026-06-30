@@ -45,3 +45,8 @@ commands.json
 # -- Logs / temp --------------------------------------------------------------
 *.log
 *.tmp
+
+# -- Local diagnostic tools (kept on disk, not shipped) -----------------------
+# Reusable debug/test scripts that aren't part of the app: matcher danger-map
+# (bug-c probe), offscreen Restore-Defaults smoke test, etc.
+tools/

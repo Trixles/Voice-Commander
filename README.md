@@ -68,9 +68,9 @@ if you don't want to.
   command to a specific one, or move whatever window is currently focused.
 - Shutdown, restart, and logout always ask you to confirm out loud before
   they run.
-- Open Mic mode drops the wake-word requirement for as long as you leave it
-  on, for stretches where you're using commands often and don't want the
-  extra step every time.
+- Open Mic mode drops the wake-word requirement for as long as it's
+  active, for stretches where you're using commands often and don't want
+  the extra step every time.
 - Launch apps, open websites or files, or run your own shell commands —
   all configurable from the settings window. No JSON editing required,
   though you can if you'd rather.
@@ -321,9 +321,9 @@ destructive without seeing it.
 ## Open Mic Mode
 
 Normally you say a wake word before every command. Open Mic mode turns
-that requirement off entirely for as long as you leave it on — useful if
-you know you'll be using commands steadily for the next while and don't
-want to say "computer" before each one.
+that requirement off entirely, as long as it's active — useful if you
+know you'll be using commands steadily for the next while and don't want
+to say "computer" before each one.
 
 This is different from [chaining commands](#how-it-works), which is what
 lets you say several things in one breath ("open reddit and open

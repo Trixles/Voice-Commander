@@ -768,12 +768,13 @@ class CommandsContainer(QWidget):
         # ---- User Commands section -----------------------------------------
         layout.addWidget(_section_label("User Commands"))
         user_blurb = QLabel(
-            "Click the Add Command button, then set a name for the command, "
-            "which action it will perform, and its activation phrases. Click "
-            "the Options button to edit an existing command.\n\n"
-            "Commands can be launched on a specific display by saying "
-            "\"[command phrase] on [alias]\". Monitor aliases can be edited in "
-            "the Displays tab."
+            "Your own custom commands. When adding a new command, you can set "
+            "the command name, which action it will perform, and its activation "
+            "phrases. Click the Options button to edit an existing command's "
+            "activation phrases.\n\n"
+            "Commands can be executed on a specific display by appending "
+            "\"on {alias}\" to the command phrase (e.g., \"Open Dolphin on "
+            "monitor 3\"). Monitor aliases can be edited in the Displays tab."
         )
         user_blurb.setWordWrap(True)
         user_blurb.setStyleSheet(_BLURB_CSS)
@@ -799,9 +800,9 @@ class CommandsContainer(QWidget):
         # ---- System Commands section ---------------------------------------
         layout.addWidget(_section_label("System Commands"))
         sys_blurb = QLabel(
-            "Built-in commands (volume, media, window, power). Their names and "
-            "actions cannot be changed, but you can edit their activation "
-            "phrases with the Options button or toggle them on/off."
+            "Built-in commands (open mic, window, volume, media, and power). "
+            "You can toggle them on or off, or edit their activation phrases "
+            "with the Options button."
         )
         sys_blurb.setWordWrap(True)
         sys_blurb.setStyleSheet(_BLURB_CSS)

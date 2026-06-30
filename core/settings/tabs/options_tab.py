@@ -146,7 +146,11 @@ def build(dialog: "SettingsDialog") -> QWidget:
         "corresponding action.\n\n"
         "The Commands tab is where you set the wake words and add or edit "
         "commands. You can use commands to open an application, file, or URL, "
-        "or to run shell commands.\n\n"
+        "or to run code.\n\n"
+        "Open Mic mode allows commands to be executed without requiring a wake "
+        "word beforehand. Click the tray icon to toggle Open Mic mode, or use "
+        "the \"Open Mic\"/\"Close Mic\" voice commands (the phrases can be "
+        "edited in the Commands tab, under System Commands).\n\n"
         "The Displays tab lets you assign aliases to your displays, so you can "
         "quickly move windows across displays using voice commands, or choose "
         "which display to execute a command on.\n\n"
@@ -158,11 +162,7 @@ def build(dialog: "SettingsDialog") -> QWidget:
         "The Log tab shows what is being heard by the interpreter, and tracks "
         "command activations. If it is consistently mishearing a particular "
         "word or phrase, this can be helpful to diagnose the issue and create "
-        "an override for it.\n\n"
-        "Open Mic mode allows commands to be executed without requiring a wake "
-        "word beforehand. Click the tray icon to toggle Open Mic mode, or use "
-        "the \"Open Mic\"/\"Close Mic\" voice commands (the phrases can be "
-        "edited in the Commands tab, under System Commands)."
+        "an override for it."
     )
     how_blurb.setWordWrap(True)
     how_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")

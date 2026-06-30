@@ -315,8 +315,8 @@ class OverridesContainer(QWidget):
 
         layout.addWidget(_section_label("System Overrides"))
         sys_blurb = QLabel(
-            "Built-in overrides covering common mishearings. They cannot be "
-            "edited, but you can toggle them on/off."
+            "Built-in overrides that cover common mishearings relevant to "
+            "Voice Commander. They can be toggled on or off."
         )
         sys_blurb.setWordWrap(True)
         sys_blurb.setStyleSheet(self._BLURB_CSS)

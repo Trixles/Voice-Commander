@@ -68,7 +68,7 @@ def build(dialog: "SettingsDialog") -> QWidget:
     tab, cl = dialog._make_scroll_tab()
     cl.addWidget(_section_label("Logging"))
     log_blurb = QLabel(
-        "The log tracks wake word and command activation, as well as exactly "
+        "Tracks wake word and command activation, and shows exactly "
         "what is heard by the interpreter (which is sometimes unintentionally "
         "hilarious). If a certain word or phrase is being consistently "
         "misheard, you can create an override for it in the Overrides tab."

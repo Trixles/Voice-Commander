@@ -774,7 +774,13 @@ class CommandsContainer(QWidget):
             "activation phrases.\n\n"
             "Commands can be executed on a specific display by appending "
             "\"on {alias}\" to the command phrase (e.g., \"Open Dolphin on "
-            "monitor 3\"). Monitor aliases can be edited in the Displays tab."
+            "monitor 3\"). Monitor aliases can be edited in the Displays tab.\n\n"
+            "Multiple commands can be chained together by separating them "
+            "with \"and\" (e.g., \"open Dolphin and open Reddit\").\n\n"
+            "Note: activation phrases can't start with \"the\" (it's "
+            "stripped automatically), and two \"open URL\" commands chained "
+            "together can't be aimed at multiple different displays, due to "
+            "how window placement is handled for browsers/new tabs."
         )
         user_blurb.setWordWrap(True)
         user_blurb.setStyleSheet(_BLURB_CSS)

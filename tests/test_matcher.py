@@ -5,8 +5,8 @@ Pure-logic tests for the matcher pipeline in core/commands.py and the
 override pre-processor in core/overrides.py. No Qt, no Vosk, no
 subprocess: just call the functions and assert on what they return.
 
-This is Tier 3 of the refactor plan in REVIEW.md. Two purposes:
-  1. Lock in current behaviour so the Tier 4 commands.py split is safe.
+Two purposes:
+  1. Lock in current matcher/override behaviour so future refactors are safe.
   2. Catch the tail-threshold / chain-rule edge cases before users do.
 
 Run from the repo root:  pytest -q

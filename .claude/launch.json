@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vc-status",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8773", "--directory", "/tmp/vc-status"],
+      "port": 8773
+    }
+  ]
+}

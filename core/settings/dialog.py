@@ -9,12 +9,12 @@ Tab layout (left to right):
   - Displays    : monitor alias accordion rows
   - Model       : Vosk model path picker
   - Log         : live listener output with colour-coded categories
-  - About       : explanatory blurb
+  - Options     : explanatory blurb
 
 Save / Restore Defaults / Exit buttons pinned outside tabs at the bottom.
 Restore Defaults is per-tab: dispatches to the active tab's reset handler
 via `_tab_reset_map`, disabled with a tooltip on tabs without defaults
-(Model, Log, About).
+(Model, Log, Options).
 
 Save behavior:
   - Writes through the symlink to the real file

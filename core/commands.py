@@ -354,10 +354,28 @@ def _default_commands() -> list[dict]:
     return commands
 
 
+class ConfigError(Exception):
+    """Raised when the config file exists but can't be parsed as JSON.
+
+    Distinct from FileNotFoundError (no config yet -> caller seeds defaults):
+    a ConfigError means there IS a file and it's corrupt, so we must NOT
+    silently overwrite it -- that would destroy the user's custom commands.
+    Callers surface it and stop rather than regenerate."""
+
+
 def load_config() -> None:
     global _commands, _config, _last_mtime
     with open(CONFIG_PATH, "r") as f:
-        data = json.load(f)
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError as e:
+            # Non-destructive: never rewrite a file we couldn't parse. Startup
+            # turns this into a friendly exit (voice_commander.main); hot-reload
+            # (_check_reload) catches it and keeps the last-good config running.
+            raise ConfigError(
+                f"{CONFIG_PATH} is not valid JSON ({e}). Fix the file or "
+                f"delete it to regenerate defaults."
+            ) from e
 
     # First launch: populate default commands and write them to disk.
     if not data.get("commands"):
@@ -443,6 +461,13 @@ def _check_reload(gui_env: dict = None) -> None:
             load_config()
             if gui_env:
                 windows.refresh_monitor_map(gui_env)
+    except ConfigError as e:
+        # The user saved a syntactically broken config while we were running
+        # (e.g. mid hand-edit). Keep the last-good config loaded and try again
+        # on the next check -- do NOT let a parse error propagate into try_match
+        # and kill the listener thread. Note we leave _last_mtime unchanged so
+        # the reload retries once the file becomes valid again.
+        print(f"[commands] Ignoring config reload: {e}")
     except OSError:
         pass
 
@@ -731,6 +756,63 @@ def _build_block_message(collisions: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# -- Phrase character sanitizing (Save-time guard) ----------------------------
+
+def sanitize_phrase_text(raw: str) -> tuple[str, str]:
+    """Strip characters that can't occur in a spoken command from phrase text.
+
+    Vosk transcriptions are letters, digits and spaces only -- never
+    punctuation or symbols -- so a phrase containing "{", "?", "@", etc. can
+    never match anything a user says; it's a dead phrase. Worse, "{...}" makes
+    the matcher treat the phrase as slot-bearing (see _score_segment), which
+    once crashed the listener on an unbalanced slot name. We forbid the whole
+    class at Save time rather than special-casing braces.
+
+    Allowed: letters, digits, spaces, and commas (the phrase-list separator).
+    Any other whitespace (tabs, newlines) collapses to a single space so
+    pasted multi-line text doesn't fuse words. Returns
+    ``(cleaned_text, removed_chars)`` where removed_chars is the sorted, unique
+    run of disallowed characters that were dropped ("" if the text was clean).
+
+    Pure and Qt-free so it lives here beside find_duplicate_phrases and is
+    unit-tested without a settings dialog; the UI only presents the result.
+    """
+    removed: set[str] = set()
+    out: list[str] = []
+    for ch in raw:
+        if ch.isalnum() or ch in ", ":
+            out.append(ch)
+        elif ch.isspace():
+            out.append(" ")  # tab/newline -> space, not a dropped character
+        else:
+            removed.add(ch)
+    cleaned = re.sub(r" {2,}", " ", "".join(out))
+    return cleaned, "".join(sorted(removed))
+
+
+def _build_invalid_chars_message(offenders: list[dict]) -> str:
+    """User-facing text for the invalid-character Save block.
+
+    ``offenders`` is a list of ``{"name": str, "cleaned": str, "removed": str}``
+    (one per command whose phrases lost characters). Pure string assembly, no
+    Qt -- unit-tested; the dialog only shows it. The per-command "…for this
+    command are now:" framing makes clear which command's phrases changed."""
+    all_removed = sorted(set("".join(o["removed"] for o in offenders)))
+    shown = " ".join(all_removed)
+    lines = [
+        "Voice phrases can only contain letters, numbers, and spaces "
+        "(use commas to separate multiple phrases).",
+        "",
+        f"You can't speak punctuation, so I removed these characters: {shown}",
+        "",
+    ]
+    for o in offenders:
+        lines.append(f"«{o['name']}» — your phrases for this command are now:")
+        lines.append(o["cleaned"].strip() or "(no phrases left)")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 # -- Single-segment scoring ---------------------------------------------------
 
 def _score_segment(
@@ -773,7 +855,15 @@ def _score_segment(
             continue  # listener-handled state transition; see _MIC_ACTIONS
         threshold = cmd.get("threshold", get_match_threshold())
         for phrase in cmd["phrases"]:
-            if _has_slots(phrase):
+            # A phrase only takes the slot path if the command actually DECLARES
+            # slots. _has_slots() just sees "{...}" in the text, and a successful
+            # extraction hard-scores 1.0 below -- so a stray-braced phrase on a
+            # command with no slot defs (e.g. a user who typed "open {x}") would
+            # otherwise win every "open ..." utterance at max score and shadow
+            # real commands. Gating on cmd["slots"] confines 1.0 to genuine slot
+            # commands; braces without a slot def fall through to literal
+            # matching, where they simply never match spoken text.
+            if _has_slots(phrase) and cmd.get("slots"):
                 raw_slots = _extract_slots(heard, phrase)
                 if raw_slots is None:
                     continue

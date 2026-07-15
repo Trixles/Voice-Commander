@@ -72,7 +72,7 @@ from PySide6.QtWidgets import (
 
 from core.commands import (
     get_vosk_model_path, _default_commands,
-    find_duplicate_phrases, _build_block_message,
+    find_duplicate_phrases, _build_block_message, _build_invalid_chars_message,
 )
 from core.aliases import (
     PINNED_SLOT as _PINNED_SLOT,
@@ -376,6 +376,25 @@ class SettingsDialog(QDialog):
         box.setEscapeButton(ok)
         box.exec()
 
+    def _show_invalid_chars_block(self, offenders: list[dict]) -> None:
+        """Modal shown when Save stripped non-speakable characters from phrases.
+
+        Parallels _show_duplicate_block: the wording is built Qt-free in
+        core.commands and only presented here. The phrase boxes have already
+        been cleaned in place (CommandsContainer.sanitize_phrases), so this
+        block returns the user to the dialog to eyeball the result and Save
+        again -- the second Save finds them clean and proceeds. PlainText so
+        stripped characters shown in the message aren't parsed as HTML."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Uh oh! That isn't gonna work.")
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(_build_invalid_chars_message(offenders))
+        ok = box.addButton("Got it", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(ok)
+        box.setEscapeButton(ok)
+        box.exec()
+
     def _autostart_is_enabled(self) -> bool | None:
         """Return True/False from `systemctl --user is-enabled` for the service,
         or None if systemctl or the unit isn't available (e.g. running from
@@ -416,6 +435,18 @@ class SettingsDialog(QDialog):
 
     def _save(self) -> None:
         old_wake_words  = self._config.get("wake_words", [self._config.get("wake_word", "computer")])
+
+        # Strip characters that can't occur in a spoken phrase (braces,
+        # punctuation, symbols) BEFORE anything else. This cleans the phrase
+        # boxes in place; if it changed anything, block this save and show the
+        # user what was removed. Mirrors the duplicate block below: returns
+        # before any write, edits stay in the dialog, and the next Save finds
+        # the boxes clean and proceeds. Runs first so the duplicate check and
+        # the write both operate on already-sanitized phrases.
+        invalid = self._commands_container.sanitize_phrases()
+        if invalid:
+            self._show_invalid_chars_block(invalid)
+            return
 
         commands = self._commands_container.collect()
 

@@ -134,3 +134,33 @@ def test_empty_config_still_seeds_full_defaults(tmp_path):
     names = [c["name"] for c in _load_back(path)["commands"]]
     assert "open_browser" in names           # user defaults seeded
     assert "minimize_window" in names         # system defaults seeded
+
+
+# -- Corrupt-config resilience (regression guards) ----------------------------
+
+def test_corrupt_json_raises_configerror_not_raw_decodeerror(tmp_path):
+    """A truncated/corrupt commands.json must surface as a friendly ConfigError
+    (which startup turns into a clean exit), NOT a bare JSONDecodeError. The
+    file is never rewritten -- overwriting would destroy the user's commands."""
+    p = tmp_path / "commands.json"
+    p.write_text('{"commands": [ {"name": "x",')  # truncated mid-JSON
+    commands.CONFIG_PATH = str(p)
+    with pytest.raises(commands.ConfigError):
+        commands.load_config()
+    # Untouched on disk -- non-destructive.
+    assert p.read_text() == '{"commands": [ {"name": "x",'
+
+
+def test_check_reload_swallows_corrupt_config(tmp_path, monkeypatch):
+    """A config corrupted WHILE running must not propagate out of _check_reload
+    -- that exception would ride up through try_match and kill the listener
+    thread. The last-good in-memory config is kept until the file is valid."""
+    p = tmp_path / "commands.json"
+    p.write_text('{"commands": [ broken')
+    commands.CONFIG_PATH = str(p)
+    monkeypatch.setattr(commands, "_config", {"sentinel": True})
+    monkeypatch.setattr(commands, "_last_mtime", 0.0)  # force mtime mismatch
+    monkeypatch.setattr(commands, "_match_call_count",
+                        commands.CHECK_MTIME_EVERY - 1)
+    commands._check_reload()  # must NOT raise
+    assert commands._config == {"sentinel": True}  # last-good preserved

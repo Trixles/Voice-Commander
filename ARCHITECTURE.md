@@ -135,6 +135,34 @@ companion — keep them in sync.
   single token (the phrase is the known/fixed side). Don't fold it into the
   global threshold.
 
+### The matcher never raises on a malformed slot phrase
+- **What:** `_extract_slots()` in `core/matcher.py` wraps `_phrase_to_regex()`
+  in `try/except re.error` and returns `None` (no match) if the phrase's slot
+  name isn't a valid regex group identifier (a space, hyphen, dot, leading
+  digit, empty `{}`, or a duplicate name all raise).
+- **Why:** `_extract_slots` runs on the listener thread for every utterance,
+  via `_score_segment`. An unguarded `re.error` propagates through `try_match`
+  → `run_listener` → the listener thread (none of which catch it) and silently
+  kills voice control — and because the bad phrase is persisted, it re-crashes
+  on every restart. The settings UI strips these characters on save, but a
+  hand-edited `commands.json` can still carry them, so the runtime guard is the
+  real safety net, not the UI.
+- **Don't:** Move the guard up into `try_match` as a blanket catch-all — that
+  would mask unrelated matcher bugs. Guard at the compile point only.
+
+### Slot phrases take the slot path only when the command declares slots
+- **What:** In `_score_segment()` (`core/commands.py`), the slot branch is
+  gated on `_has_slots(phrase) and cmd.get("slots")`. A phrase with `{...}` on
+  a command that declares no `slots` dict falls through to `_match_non_slot`
+  (literal matching), where the braces never match spoken text.
+- **Why:** A successful slot extraction hard-scores 1.0. Without the gate, a
+  stray-braced user phrase (e.g. someone who typed `open {x}`) on a slot-less
+  command would win *every* "open ..." utterance at max score and shadow the
+  real commands. The 1.0 is only correct for genuine slot commands (the
+  slot-pinned `move_to_monitor` / `set_volume`, which do declare `slots`).
+- **Don't:** Score a braced phrase as a slot match on a command with no slot
+  defs. Don't assume `_has_slots()` alone means "this is a slot command."
+
 ### Settings UI has two command-row tiers
 - **What:** User actions (editable name/dropdown, deletable, alphabetized)
   and system commands (locked name, editable phrases for most, read-only
@@ -367,6 +395,23 @@ companion — keep them in sync.
   `_default_commands()` used by installer and Restore Defaults.
 - **Don't:** Hardcode defaults in `install.sh`.
 
+### Corrupt config is non-destructive: `ConfigError`, never overwrite
+- **What:** `load_config()` catches a `json.JSONDecodeError` from a present
+  but corrupt `commands.json` and raises `commands.ConfigError` (distinct from
+  `FileNotFoundError`, which is the legitimate first-run "seed defaults" path).
+  It NEVER rewrites a file it couldn't parse — that would destroy the user's
+  custom commands.
+- **Call sites handle it by severity:** startup (`voice_commander.main`) prints
+  the message and `sys.exit(1)` — a clean, loud stop, not a traceback.
+  Hot-reload (`_check_reload`) catches `ConfigError`, keeps the last-good
+  in-memory config, and leaves `_last_mtime` unchanged so the reload retries
+  once the file is valid again — a mid-run corrupt save must not propagate into
+  `try_match` and kill the listener thread. The settings-dialog reload paths
+  (`_save`, `_reset_via`) already sit inside broad `except Exception`.
+- **Don't:** Regenerate defaults over a corrupt file. Let a parse error reach
+  the listener thread. Confuse `FileNotFoundError` (seed) with `ConfigError`
+  (stop).
+
 ### Mic toggles are `open_mic` / `close_mic` system commands, not a separate tab
 - **What (0.8.0):** Open/close mic phrases live in the command list as the
   `open_mic` / `close_mic` **system commands** (`_default_commands()`),
@@ -428,6 +473,30 @@ companion — keep them in sync.
   through by design. Filter disabled commands out of detection. Import the
   PySide6-bound display helpers from `core/settings/helpers.py` into
   commands.py (breaks `--emit-defaults`).
+
+### Save strips non-speakable characters from phrases
+- **What:** `SettingsDialog._save()` calls
+  `CommandsContainer.sanitize_phrases()` FIRST — before `collect()`, the
+  duplicate check, or any write. It removes every character that can't occur
+  in a Vosk transcription (allowed: letters, digits, spaces, and commas — the
+  phrase-list separator; other whitespace collapses to a single space). The
+  detection/cleaning string logic (`sanitize_phrase_text`) and the message
+  builder (`_build_invalid_chars_message`) are pure and Qt-free in
+  `core/commands.py`, unit-tested without a dialog; the dialog only presents.
+- **Behaviour:** If anything was stripped, the phrase boxes are updated in
+  place to the cleaned text, a warning modal ("Uh oh! That isn't gonna work.")
+  names each affected command and its now-clean phrases, and the save returns
+  early — exactly like the duplicate block. The next Save finds the boxes
+  clean and proceeds. Slot-pinned rows are skipped (their read-only field
+  holds the legitimate `{alias}` template).
+- **Why:** Punctuation/symbols in a phrase can never match speech (a dead
+  phrase), and `{...}` additionally routed the phrase through the slot matcher
+  (historically a crash vector — see "The matcher never raises…"). Forbidding
+  the whole class at save time is the UI-side complement to the runtime guard.
+- **Don't:** Strip on keystroke or paste (rejected — feels like a broken
+  field; the user types freely and finds out at save). Sanitize slot-pinned
+  rows. Treat this as a security boundary — a hand-edited config bypasses it,
+  which is why the runtime matcher guard must stand independently.
 
 ### `kwriteconfig6` calls use absolute path to kwinrc
 - **What:** Pass `os.path.expanduser("~/.config/kwinrc")` to

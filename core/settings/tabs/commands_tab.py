@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.aliases import PINNED_SLOT as _PINNED_SLOT
+from core.commands import sanitize_phrase_text
 from core.env import blur_compositing_available
 from core.settings.helpers import (
     APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY,
@@ -772,15 +773,18 @@ class CommandsContainer(QWidget):
             "the command name, which action it will perform, and its activation "
             "phrases. Click the Options button to edit an existing command's "
             "activation phrases.\n\n"
-            "Commands can be executed on a specific display by appending "
-            "\"on {alias}\" to the command phrase (e.g., \"Open Dolphin on "
-            "monitor 3\"). Monitor aliases can be edited in the Displays tab.\n\n"
+            "Commands can be executed on a specific display by saying \"on\" "
+            "and a monitor's alias (e.g., \"Open Dolphin on monitor three\"). "
+            "Monitor aliases can be edited in the Displays tab.\n\n"
             "Multiple commands can be chained together by separating them "
             "with \"and\" (e.g., \"open Dolphin and open Reddit\").\n\n"
-            "Note: activation phrases can't start with \"the\" (it's "
-            "stripped automatically), and two \"open URL\" commands chained "
-            "together can't be aimed at multiple different displays, due to "
-            "how window placement is handled for browsers/new tabs."
+            "Note: phrases can only contain letters, numbers, and spaces "
+            "(use commas to separate multiple phrases) — you can't speak "
+            "punctuation, so anything else is removed when you save. Phrases "
+            "also can't start with \"the\" (it's stripped automatically), and "
+            "two \"open URL\" commands chained together can't be aimed at "
+            "multiple different displays, due to how window placement is "
+            "handled for browsers/new tabs."
         )
         user_blurb.setWordWrap(True)
         user_blurb.setStyleSheet(_BLURB_CSS)
@@ -934,6 +938,34 @@ class CommandsContainer(QWidget):
                 entry["enabled"] = row._enable_toggle.isChecked()
             result.append(entry)
         return result
+
+    def sanitize_phrases(self) -> list[dict]:
+        """Strip non-speakable characters from every editable phrase box.
+
+        Called at the start of Save, before collect(). Mutates each offending
+        row's phrase box IN PLACE to the cleaned text (so the change is visible
+        and re-collect yields clean data), and returns one entry per affected
+        command: ``{"name", "cleaned", "removed"}``. An empty list means every
+        phrase was already clean.
+
+        Slot-pinned rows are skipped: their phrase field is read-only and holds
+        the legitimate "{alias}" template, which sanitizing would wrongly gut.
+        """
+        offenders: list[dict] = []
+        for row in self._rows:
+            if row._is_slot_pinned:
+                continue
+            raw = row._phrases_edit.toPlainText()
+            cleaned, removed = sanitize_phrase_text(raw)
+            if not removed:
+                continue
+            row._phrases_edit.setPlainText(cleaned)
+            offenders.append({
+                "name": row._name_edit.text().strip() or "Untitled",
+                "cleaned": cleaned,
+                "removed": removed,
+            })
+        return offenders
 
 
 # -- Tab builder --------------------------------------------------------------

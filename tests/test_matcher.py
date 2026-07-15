@@ -529,3 +529,53 @@ def test_apply_overrides_runs_regardless_of_enabled():
     afterwards. enabled lives entirely downstream of overrides."""
     overrides = [{"pattern": "vol down", "replacement": "volume down"}]
     assert apply_overrides("vol down", overrides) == "volume down"
+
+
+# -- Slot phrase robustness (regression guards) -------------------------------
+
+@pytest.mark.parametrize("phrase", [
+    "open zoom on {my main}",  # space -> invalid group name
+    "open {app-name}",         # hyphen
+    "launch {1st}",            # leading digit
+    "open {}",                 # empty slot name
+    "{alias} {alias}",         # duplicate group name
+    "open {app.exe}",          # dot
+])
+def test_malformed_slot_phrase_returns_none_not_raise(phrase):
+    """A slot name that isn't a valid regex group identifier must yield a
+    clean "no match" (None), never a re.error. This runs on the listener
+    thread for every utterance -- an unguarded raise silently kills voice
+    control (see ARCHITECTURE 'The matcher never raises on a bad slot
+    phrase'). Reachable via a hand-edited commands.json."""
+    assert _extract_slots("open zoom my main", phrase) is None
+
+
+def test_braced_phrase_without_slot_def_does_not_hijack(monkeypatch):
+    """A phrase containing "{x}" on a command that declares NO slots must not
+    score 1.0 against arbitrary speech. Before the fix, any successful slot
+    extraction hard-scored 1.0, so a stray-braced user phrase shadowed every
+    "open ..." command. Now it falls to literal matching and simply misses."""
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "bogus", "phrases": ["open {x}"], "action": "launch_app",
+         "args": {}, "cooldown": 0},  # deliberately NO "slots" key
+    ])
+    monkeypatch.setattr(commands, "_config", {})
+    monkeypatch.setattr(commands, "_check_reload", lambda gui_env=None: None)
+    assert commands._score_segment("open literally anything at all") is None
+
+
+def test_braced_phrase_with_slot_def_still_matches(monkeypatch):
+    """Positive control for the gate above: a genuine slot command (declares
+    "slots") must still match and resolve its slot. Guards against the fix
+    over-reaching and breaking real slot commands like move_to_monitor."""
+    monkeypatch.setattr(commands, "_commands", [
+        {"name": "move", "phrases": ["move window to {alias}"],
+         "action": "move_to_monitor", "args": {},
+         "slots": {"alias": {"fuzzy": False}}, "cooldown": 0},
+    ])
+    monkeypatch.setattr(commands, "_config", {"monitors": {"DP-1": ["left"]}})
+    monkeypatch.setattr(commands, "_check_reload", lambda gui_env=None: None)
+    res = commands._score_segment("move window to left")
+    assert res is not None
+    assert res[1]["name"] == "move"
+    assert res[2] == {"alias": "left"}

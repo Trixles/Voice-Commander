@@ -161,7 +161,13 @@ def main() -> None:
         )
         sys.exit(0)
 
-    commands.load_config()
+    try:
+        commands.load_config()
+    except commands.ConfigError as e:
+        # Config file exists but is corrupt JSON. Exit loudly rather than
+        # regenerate -- overwriting would destroy the user's custom commands.
+        print(f"[voice-commander] ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
     refresh_monitor_map(GUI_ENV)
     commands.seed_monitor_defaults()
 

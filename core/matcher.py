@@ -74,7 +74,18 @@ def _phrase_to_regex(phrase: str) -> re.Pattern:
 
 
 def _extract_slots(heard: str, phrase: str) -> dict[str, str] | None:
-    pattern = _phrase_to_regex(phrase)
+    # A slot name that isn't a valid Python group identifier (spaces, hyphens,
+    # dots, a leading digit, empty {}, or a duplicate name) makes
+    # _phrase_to_regex raise re.error. That must never propagate: this runs on
+    # the listener thread for every utterance, so an unguarded raise would kill
+    # voice control until the offending phrase is removed from commands.json.
+    # The settings UI strips these characters on save, but a hand-edited config
+    # can still carry them -- treat an uncompilable slot phrase as "no match".
+    try:
+        pattern = _phrase_to_regex(phrase)
+    except re.error as e:
+        print(f"[matcher] Skipping uncompilable slot phrase {phrase!r}: {e}")
+        return None
     match = pattern.search(heard)
     if not match:
         return None

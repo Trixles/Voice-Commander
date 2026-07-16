@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] &mdash; 2026-07-15
+
+First stable release. The command set, config format, and settings UI are
+considered settled; changes from here follow semantic versioning off this
+baseline.
+
+### Added
+- **Minimize Window system command** &mdash; a new `minimize_window` action
+  (KWin "Window Minimize") wired into the action map, defaults, and
+  notifications. The window-command group is ordered move &rarr; minimize
+  &rarr; maximize &rarr; close.
+- **Config self-heal.** Loading an existing `commands.json` now merges in any
+  system commands shipped since it was written, matched by name, so upgrading
+  gains new built-in commands without a destructive Restore Defaults. Your
+  edits and disabled states are preserved.
+- **"Celery Man" system command** &mdash; an easter-egg command (last in the
+  System list) that opens a baked-in URL. Because the clip repeatedly says
+  "computer," it selectively mutes the "computer" wake word for 100 seconds
+  while it plays; every other wake word keeps working, and the mute is
+  time-based so it restores itself.
+
+### Changed
+- **Responsive wake feedback.** The LED, tray, and "Listening…" acknowledgement
+  now fire the moment the wake word lands in a Vosk partial (~1.5s earlier than
+  the old end-of-utterance path), so the app feels like it's listening as you
+  speak. The command window is now an inactivity timer that partials keep alive,
+  so a long chained phrase can't fall asleep mid-sentence. A wake-word-only
+  utterance keeps listening instead of toasting, and a total miss toasts exactly
+  once (the old double "No match" is gone).
+- **Whole-word wake matching.** Wake words now match on word boundaries, so
+  "computer" wakes the app but "computerized" does not.
+- **Cross-command duplicate phrases now auto-resolve instead of blocking the
+  save.** When you assign a phrase already owned by another command, it's
+  stripped from the newcomer and left with the established owner (with a notice),
+  rather than refusing to save. Within-command duplicates and characters that
+  can't be spoken (anything outside letters, digits, spaces, and commas) are
+  likewise stripped on save with a warning naming each affected command.
+  Slot-pinned `{alias}` rows are left untouched.
+- **Frosted settings window.** The translucent build now paints a single frosted
+  backing panel with every structural surface above it transparent, eliminating
+  the compounded near-opaque stacking and the alpha-0 holes (tab-bar gaps, button
+  bar) that previously showed raw wallpaper. Inactive tabs stay solid so the
+  active tab is obvious. All save-blocking dialogs are now frosted panels rather
+  than `QMessageBox`, which couldn't paint a background under the translucent
+  window (fixing the see-through look and a text-clipping sizing bug). The opaque
+  no-blur build is unchanged.
+- **Settings-tab help text** rewritten across Commands, Overrides, Displays, Log,
+  and Options for clarity, including a note on `and`-chaining and its known
+  limitations in the User Commands blurb.
+
+### Fixed
+- **"Move to {monitor}" landed windows on the wrong display.** The move path
+  resolved a monitor alias to a numeric KWin screen index, which matches neither
+  KWin's own numbering nor survives a monitor hotplug. Both monitor-routing paths
+  (arriving windows and the active window) now converge on output **names**
+  through the `vc-window-placer`, which resolves the live screen by name.
+- **Near-homophones fired the wrong single-word command** (e.g. "cause" &rarr;
+  Media Pause). A one-letter difference still scores ~0.80 under the fuzzy
+  matcher, clearing the 0.75 default. Single-token command phrases now hard-reject
+  below a 0.85 floor; the effective bar is `max(your strictness setting, 0.85)`,
+  so it never loosens below what you've chosen. Multi-word phrases are unaffected.
+- **Three crash/robustness bugs found in a pre-1.0 edge-case audit:**
+  - A slot name that isn't a valid regex group (containing a space, hyphen, dot,
+    leading digit, etc.) no longer crashes the listener thread with a regex error
+    &mdash; which killed voice control and re-crashed on restart since the phrase
+    persists in config.
+  - A stray-braced phrase (e.g. `open {x}`) on a command that declares no slots
+    can no longer hard-score a perfect match and shadow every other "open …"
+    command; it falls back to literal matching and simply misses.
+  - A corrupt `commands.json` now raises a clean `ConfigError` and is never
+    overwritten. Startup exits cleanly; a hot-reload keeps the last-good config
+    instead of letting the parse error kill the listener.
+
+### Internal
+- Pre-1.0 cleanup pass (net &minus;102 LOC): de-duplicated the default-source
+  helper into `core/run.py`, dropped the pre-0.8.0 mic-key migration shim,
+  collapsed the notification builder into a dispatch table, and merged three
+  byte-identical CONFIRMING-entry blocks in the listener. Behavior-preserving.
+- Repo now tracks `CLAUDE.md` and `.claude/` per Anthropic's shared-config
+  convention (`HANDOFF.md` and worktrees stay gitignored).
+- Test suite grew to 120 passing; several new ARCHITECTURE.md invariants
+  document the wake, slot, config-load, and monitor-routing behavior above.
+
 ## [0.9.0] &mdash; 2026-05-25
 
 ### Added
@@ -376,7 +459,8 @@ Initial public release.
   affects any external tool trying to place these browsers. Workaround:
   open the browser first, then use `"move to {monitor}"` to relocate it.
 
-[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/Trixles/Voice-Commander/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/Trixles/Voice-Commander/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Trixles/Voice-Commander/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Trixles/Voice-Commander/compare/v0.6.0...v0.7.0

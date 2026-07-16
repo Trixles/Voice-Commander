@@ -4,7 +4,7 @@
 ![Platform: KDE Plasma 6](https://img.shields.io/badge/platform-KDE%20Plasma%206%20%2F%20Wayland-1d99f3.svg)
 ![Speech: Vosk (offline)](https://img.shields.io/badge/speech-Vosk%20(offline)-success.svg)
 
-A voice-controlled app for KDE Plasma 6 on Wayland. Say a wake word, then a
+A voice control app for KDE Plasma 6 on Wayland. Say a wake word, then a
 command, and it does the thing. Speech recognition happens entirely on your
 machine, so there's no account to create and nothing gets sent anywhere.
 

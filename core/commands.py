@@ -74,6 +74,7 @@ _MIC_ACTIONS = {"open_mic", "close_mic"}
 
 ACTION_REGISTRY: dict[str, Any] = {
     "open_url":               apps.open_url,
+    "celery_man":             apps.celery_man,
     "launch_app":             apps.launch_app,
     "open_file":              apps.open_file,
     "volume_up":              system.volume_up,
@@ -296,6 +297,16 @@ def _default_system_commands() -> list[dict]:
         "action": "logout",
         "args": {},
         "confirm": True,
+    })
+    commands.append({
+        # The one that started it all. Its own system action bakes in the URL
+        # (not user-editable) and mutes the "computer" wake word for a bit,
+        # since the video says "computer" repeatedly. Last in the system list.
+        "name": "celery_man",
+        "display_name": "Celery Man",
+        "phrases": ["load up celery man"],
+        "action": "celery_man",
+        "args": {},
     })
     return commands
 
@@ -644,118 +655,6 @@ def _wm_class_hint(cmd: dict) -> str:
     return os.path.basename(raw.split()[0]).lower()
 
 
-# -- Duplicate-phrase detection (settings-time validation) --------------------
-
-def _oxford_join(names: list[str]) -> str:
-    """Join names as 'A and B' (two) or 'A, B, and C' (three or more)."""
-    if len(names) == 2:
-        return f"{names[0]} and {names[1]}"
-    return ", ".join(names[:-1]) + f", and {names[-1]}"
-
-
-def find_duplicate_phrases(commands: list[dict]) -> list[dict]:
-    """
-    Find command phrases that collide exactly across two or more commands.
-
-    A "collision" is the same phrase (case-insensitive, whitespace-trimmed)
-    appearing on two or more distinct commands. This is the detection behind
-    the settings Save block: two commands can't share a phrase, because only
-    the first in commands.json order would ever fire (see _score_segment's
-    strict ``>`` tie-break) -- the rest are silently shadowed.
-
-    Scope is deliberately aligned with the runtime matcher:
-      - EXACT match only. Fuzzy near-collisions ("volume up" vs "volume app")
-        are NOT detected here -- that's a different, much harder problem.
-      - Slot-bearing phrases are skipped (``_has_slots``): slot templates never
-        match by exact string equality at runtime, so they can't "exactly"
-        collide.
-      - Blank phrases are ignored.
-      - A phrase listed twice within ONE command is de-duped per command (not a
-        cross-command collision).
-      - DISABLED commands are INCLUDED: a disabled command still wins the match
-        (it fires a "disabled" notice and shadows the enabled twin -- see
-        _score_segment), so a disabled duplicate is just as broken.
-
-    Returns one entry per colliding phrase, in first-appearance order::
-
-        {"phrase": <first raw spelling seen>,
-         "commands": [{"name": <display name>, "enabled": <bool>}, ...]}
-
-    Commands within an entry are in collected/file order (which is the runtime
-    match order). Only phrases shared by >= 2 commands are returned.
-    """
-    groups: dict[str, list[dict]] = {}
-    display_phrase: dict[str, str] = {}
-    for cmd in commands:
-        # collect() always populates display_name for collidable rows; the slug
-        # title-case is a Qt-free fallback so commands.py never has to import
-        # the PySide6-bound display helpers (keeps --emit-defaults working).
-        name = cmd.get("display_name") or cmd.get("name", "").replace("_", " ").title()
-        enabled = cmd.get("enabled", True)
-        seen_in_cmd: set[str] = set()
-        for phrase in cmd.get("phrases", []):
-            if _has_slots(phrase):
-                continue
-            norm = phrase.strip().lower()
-            if not norm or norm in seen_in_cmd:
-                continue
-            seen_in_cmd.add(norm)
-            display_phrase.setdefault(norm, phrase.strip())
-            groups.setdefault(norm, []).append({"name": name, "enabled": enabled})
-
-    return [
-        {"phrase": display_phrase[norm], "commands": members}
-        for norm, members in groups.items()
-        if len(members) >= 2
-    ]
-
-
-def _build_block_message(collisions: list[dict]) -> str:
-    """
-    Build the user-facing text for the duplicate-phrase Save block.
-
-    Pure string assembly (no Qt) so it is unit-testable. ``collisions`` is the
-    output of find_duplicate_phrases(). Disabled commands are annotated so the
-    user understands why a command they switched off still blocks the save.
-    """
-    def _name(member: dict) -> str:
-        label = f"«{member['name']}»"
-        return f"{label} (disabled)" if not member.get("enabled", True) else label
-
-    def _has_disabled(members: list[dict]) -> bool:
-        return any(not m.get("enabled", True) for m in members)
-
-    if len(collisions) == 1:
-        c = collisions[0]
-        joined = _oxford_join([_name(m) for m in c["commands"]])
-        msg = (
-            f'Can\'t save — two commands share a phrase.\n\n'
-            f'"{c["phrase"]}" is set on {joined}. A phrase can only belong to '
-            f'one command — otherwise only the first one would ever respond.\n\n'
-            f'Remove it from one of them, then save.'
-        )
-        if _has_disabled(c["commands"]):
-            msg += (
-                '\n\nNote: a disabled command still claims its phrases — '
-                'disabling it doesn\'t free them up.'
-            )
-        return msg
-
-    CAP = 6
-    lines = [
-        'Can\'t save — these phrases are each used by more than one command. '
-        'Every phrase can belong to only one. Fix them, then save:',
-        '',
-    ]
-    for c in collisions[:CAP]:
-        names = ", ".join(_name(m) for m in c["commands"])
-        lines.append(f'• "{c["phrase"]}" — {names}')
-    extra = len(collisions) - CAP
-    if extra > 0:
-        lines.append(f'…and {extra} more.')
-    return "\n".join(lines)
-
-
 # -- Phrase character sanitizing (Save-time guard) ----------------------------
 
 def sanitize_phrase_text(raw: str) -> tuple[str, str]:
@@ -774,8 +673,8 @@ def sanitize_phrase_text(raw: str) -> tuple[str, str]:
     ``(cleaned_text, removed_chars)`` where removed_chars is the sorted, unique
     run of disallowed characters that were dropped ("" if the text was clean).
 
-    Pure and Qt-free so it lives here beside find_duplicate_phrases and is
-    unit-tested without a settings dialog; the UI only presents the result.
+    Pure and Qt-free so it lives here beside the other save-time phrase
+    guards and is unit-tested without a settings dialog; the UI only presents.
     """
     removed: set[str] = set()
     out: list[str] = []
@@ -795,22 +694,159 @@ def _build_invalid_chars_message(offenders: list[dict]) -> str:
 
     ``offenders`` is a list of ``{"name": str, "cleaned": str, "removed": str}``
     (one per command whose phrases lost characters). Pure string assembly, no
-    Qt -- unit-tested; the dialog only shows it. The per-command "…for this
-    command are now:" framing makes clear which command's phrases changed."""
+    Qt -- unit-tested; the dialog only shows it. The per-command "…for the
+    <name> command are now:" framing makes clear which command changed."""
     all_removed = sorted(set("".join(o["removed"] for o in offenders)))
     shown = " ".join(all_removed)
     lines = [
-        "Voice phrases can only contain letters, numbers, and spaces "
-        "(use commas to separate multiple phrases).",
+        "Voice phrases can only contain letters, numbers, and spaces, so the "
+        "following characters have been removed:",
         "",
-        f"You can't speak punctuation, so I removed these characters: {shown}",
+        shown,
         "",
     ]
     for o in offenders:
-        lines.append(f"«{o['name']}» — your phrases for this command are now:")
+        lines.append(f"Your phrases for the {o['name']} command are now:")
         lines.append(o["cleaned"].strip() or "(no phrases left)")
         lines.append("")
     return "\n".join(lines).rstrip()
+
+
+def dedupe_phrase_text(raw: str) -> tuple[str, list[str]]:
+    """Drop phrases listed more than once within a single command's box.
+
+    Comparison is case-insensitive and whitespace-trimmed (matching how the
+    runtime matcher normalizes). The first spelling of each phrase is kept in
+    order; later repeats are dropped. Blank entries (e.g. a trailing comma) are
+    also discarded. Returns ``(cleaned_text, removed_phrases)`` where
+    removed_phrases lists the dropped duplicates in the raw spelling seen ("[]"
+    if nothing was duplicated).
+
+    This is the WITHIN-command case; cross-command collisions are handled
+    separately by find_cross_collision. Pure and Qt-free."""
+    seen: set[str] = set()
+    kept: list[str] = []
+    removed: list[str] = []
+    for part in raw.split(","):
+        phrase = part.strip()
+        if not phrase:
+            continue
+        key = phrase.lower()
+        if key in seen:
+            removed.append(phrase)
+            continue
+        seen.add(key)
+        kept.append(phrase)
+    return ", ".join(kept), removed
+
+
+def _build_duplicate_removed_message(offenders: list[dict]) -> str:
+    """User-facing text for the within-command duplicate-phrase Save block.
+
+    ``offenders`` is a list of ``{"name": str, "cleaned": str, "removed": [..]}``
+    (one per command that listed a phrase more than once). Parallels
+    _build_invalid_chars_message. Pure/Qt-free -- unit-tested; dialog presents."""
+    lines = [
+        "Each phrase only needs to be listed once per command, so the "
+        "duplicates have been removed.",
+        "",
+    ]
+    for o in offenders:
+        lines.append(f"Your phrases for the {o['name']} command are now:")
+        lines.append(o["cleaned"].strip() or "(no phrases left)")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def find_cross_collision(commands: list[dict]) -> dict | None:
+    """Find the first phrase claimed by two different commands at once.
+
+    ``commands`` is a list, in row/file order, of
+    ``{"name", "enabled", "original": [phrases on disk], "current": [phrases
+    now]}``. Only phrases in TWO OR MORE commands' *current* lists count, so a
+    phrase moved from one command to another (dropped here, added there) is not
+    a collision. Comparison is case-insensitive and trimmed; within-command
+    repeats are ignored (they're handled by dedupe first).
+
+    The keeper (owner) of a colliding phrase is the command that already had it
+    on disk -- the established owner -- so a user can't knock a phrase off a
+    built-in command just by duplicating it. If neither had it (two commands
+    added the same new phrase), the first in order keeps it. Every OTHER holder
+    is a loser; this returns the FIRST loser found, scanning in order:
+
+        {"phrase", "owner_name", "owner_enabled", "loser_index",
+         "loser_name", "loser_cleaned"}
+
+    ``loser_index`` indexes ``commands``; ``loser_cleaned`` is that command's
+    current phrases minus the colliding one, comma-joined -- the caller writes
+    it back to the box. Returns None if there are no cross-command collisions.
+    One per call: the caller blocks and the next Save surfaces the next.
+
+    Pure and Qt-free -- unit-tested; the container only supplies row data and
+    applies the mutation."""
+    def _norm_unique(phrases: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for p in phrases:
+            s = p.strip()
+            k = s.lower()
+            if s and k not in seen:
+                seen.add(k)
+                out.append(s)
+        return out
+
+    current = [_norm_unique(c["current"]) for c in commands]
+    on_disk = [{p.strip().lower() for p in c.get("original", [])} for c in commands]
+
+    holders: dict[str, list[int]] = {}
+    for i, phrases in enumerate(current):
+        for p in phrases:
+            holders.setdefault(p.lower(), []).append(i)
+
+    for i, phrases in enumerate(current):
+        for p in phrases:
+            key = p.lower()
+            idxs = holders.get(key, [])
+            if len(idxs) < 2:
+                continue
+            keeper = next((j for j in idxs if key in on_disk[j]), idxs[0])
+            if keeper == i:
+                continue  # this command legitimately owns the phrase
+            remaining = [q for q in phrases if q.lower() != key]
+            return {
+                "phrase": p,
+                "owner_name": commands[keeper]["name"],
+                "owner_enabled": commands[keeper].get("enabled", True),
+                "loser_index": i,
+                "loser_name": commands[i]["name"],
+                "loser_cleaned": ", ".join(remaining),
+            }
+    return None
+
+
+def _build_cross_collision_message(info: dict) -> str:
+    """User-facing text for the cross-command duplicate auto-fix.
+
+    ``info`` is a find_cross_collision() result. The phrase has already been
+    stripped from the loser's box, so this reports which command still owns it
+    and what the loser's phrases are now. Pure/Qt-free -- unit-tested."""
+    lines = [
+        "Each phrase can only belong to a single command.",
+        "",
+        f'The phrase "{info["phrase"]}" is already being used on the '
+        f'{info["owner_name"]} command. You must remove it from that command '
+        f'before you can add it to this one.',
+        "",
+        f'Your phrases for the {info["loser_name"]} command are now:',
+        info["loser_cleaned"].strip() or "(no phrases left)",
+    ]
+    if not info.get("owner_enabled", True):
+        lines += [
+            "",
+            "Note: a disabled command still claims its phrases — disabling it "
+            "doesn't free them up.",
+        ]
+    return "\n".join(lines)
 
 
 # -- Single-segment scoring ---------------------------------------------------
@@ -1018,6 +1054,7 @@ def _url_domain(url: str) -> str:
 _NOTIFICATION_TEMPLATES = {
     "launch_app":   lambda m, env: f"Opening {m.get('app', 'app')}",
     "open_url":     lambda m, env: f"Opening {_url_domain(m.get('url', ''))}",
+    "celery_man":   lambda m, env: "Loading up Celery Man",
     "open_file":    lambda m, env: f"Opening {os.path.basename(m.get('path', ''))}",
     "run_command":  lambda m, env: "Running command.",
     "set_volume":   lambda m, env: f"Volume set to {m.get('level', '')}%",

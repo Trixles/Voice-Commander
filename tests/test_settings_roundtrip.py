@@ -26,7 +26,6 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from core.settings.tabs.commands_tab import CommandsContainer  # noqa: E402
-from core.commands import find_duplicate_phrases  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -104,10 +103,10 @@ def test_enabled_roundtrips_through_collect_and_reload(qapp):
     assert recollected["close_window"]["enabled"] is True
 
 
-def test_duplicate_phrase_detected_through_collect(qapp):
-    """Integration: a real CommandsContainer with two rows sharing a phrase,
-    serialized via collect(), is caught by find_duplicate_phrases. This is the
-    exact path the Save block walks (collect() -> detector). The slot-pinned
+def test_cross_collision_resolved_through_container(qapp):
+    """Integration: a real CommandsContainer with two rows sharing a phrase.
+    resolve_first_cross_collision() strips the phrase from the command adding
+    it and keeps it on the owner -- the exact path Save walks. The slot-pinned
     rows collect() always appends carry slot phrases, so they don't false-fire."""
     cmds = [
         {"name": "open_reddit", "display_name": "Open Reddit",
@@ -117,7 +116,11 @@ def test_duplicate_phrase_detected_through_collect(qapp):
          "phrases": ["Open Reddit"], "action": "open_url",
          "args": {"url": "https://old.reddit.com"}},
     ]
-    dupes = find_duplicate_phrases(CommandsContainer(cmds).collect())
-    assert len(dupes) == 1
-    assert dupes[0]["phrase"].strip().lower() == "open reddit"
-    assert len(dupes[0]["commands"]) == 2
+    container = CommandsContainer(cmds)
+    info = container.resolve_first_cross_collision()
+    assert info is not None
+    assert info["phrase"].strip().lower() == "open reddit"
+    # The colliding phrase is stripped from the loser's box (case-insensitive).
+    assert "open reddit" not in info["loser_cleaned"].lower()
+    # Idempotent: once resolved, a second pass finds nothing.
+    assert container.resolve_first_cross_collision() is None

@@ -78,6 +78,7 @@ _ACTION_LABELS = {
     "move_window_to_monitor":  "Move window to monitor",  # was "Move to monitor" (renamed 0.6.0)
     "maximize_window":         "Maximize window",
     "open_settings":           "Open VC settings",
+    "celery_man":              "Celery Man",
 }
 
 # Confirmation-flow actions: shown as read-only note in the phrases body.
@@ -149,7 +150,8 @@ _SYSTEM_COMMAND_ORDER = [
     "logout",
     "restart",
     "shutdown",
-    "open_settings",       # 0.7.0: surfaced at the very bottom of the list
+    "open_settings",       # 0.7.0: surfaced near the bottom of the list
+    "celery_man",          # 1.0: the very last one, by popular demand
 ]
 
 # Names already warned about (unordered system commands) -- warn once per

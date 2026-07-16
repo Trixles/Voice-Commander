@@ -122,3 +122,36 @@ def test_multiword_wake_phrase_is_wake_only():
     """A multi-word wake phrase said alone is still wake-only."""
     d = WakeWordDetector(["hey computer"])
     assert d.is_wake_only("hey computer") is True
+
+
+# -- check(exclude=...): temporary wake-word muting (Celery Man) ---------------
+
+def test_check_excludes_named_wake_word():
+    """An excluded wake word no longer counts, so the Celery Man video's own
+    'computer' lines don't trip the wake word during the mute window."""
+    d = WakeWordDetector(["computer", "hey dude"])
+    assert d.check("computer") is True                       # normally wakes
+    assert d.check("computer", exclude=("computer",)) is False
+
+
+def test_check_exclude_leaves_other_wake_words_active():
+    """Muting 'computer' must not mute the user's OTHER wake words."""
+    d = WakeWordDetector(["computer", "hey dude"])
+    assert d.check("hey dude", exclude=("computer",)) is True
+
+
+def test_check_exclude_normalizes_like_stored_words():
+    """The exclude list is normalized the same way as configured wake words,
+    so case/whitespace differences still match and mute correctly."""
+    d = WakeWordDetector(["hey computer"])
+    assert d.check("hey computer", exclude=("Hey   Computer",)) is False
+
+
+def test_check_exclude_of_nonconfigured_word_is_noop():
+    d = WakeWordDetector(["computer"])
+    assert d.check("computer", exclude=("banana",)) is True
+
+
+def test_empty_exclude_is_normal_check():
+    d = WakeWordDetector(["computer"])
+    assert d.check("computer", exclude=()) is True

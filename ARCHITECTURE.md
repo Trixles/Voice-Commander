@@ -450,53 +450,80 @@ companion — keep them in sync.
   (and a buggy save could destroy data).
 - **Don't:** Strip dirty-signal plumbing. Make Save enabled-by-default.
 
-### Save is blocked on exact duplicate command phrases
-- **What:** `SettingsDialog._save()` calls `find_duplicate_phrases(commands)`
-  (core/commands.py) right after `collect()` and BEFORE any write. If two or
-  more commands share an exact phrase (case-insensitive, trimmed), it shows
-  `_show_duplicate_block` (a QMessageBox naming the offenders) and returns
-  early -- nothing is written, every pending edit stays in the dialog for the
-  user to fix and retry. Detection is EXACT-match only, EXCLUDES slot phrases
-  (`_has_slots`), de-dupes per command, and INCLUDES disabled commands (a
-  disabled command still wins the match and shadows the enabled twin -- see
-  "Disabled commands are matched but not dispatched"). Detection and the
-  message builder (`_build_block_message`) are pure and Qt-free, so they live
-  in commands.py and are unit-tested without Qt; the dialog only presents.
-- **Why:** Two commands can't usefully share a phrase -- only the first in
-  file order ever fires (strict `>` tie-break in `_score_segment`); the rest
-  are silently shadowed. There is no legitimate persistent duplicate, so the
-  state is forbidden rather than merely warned. The shipped defaults are
-  guarded by a test (no exact dups) because a default collision would lock
-  EVERY user out of saving.
-- **Don't:** Describe the block as catching ALL collisions -- it is
-  exact-match only; fuzzy near-collisions ("volume up" vs "volume app") sail
-  through by design. Filter disabled commands out of detection. Import the
-  PySide6-bound display helpers from `core/settings/helpers.py` into
-  commands.py (breaks `--emit-defaults`).
+### Cross-command duplicate phrases are auto-resolved at Save, not blocked
+- **What:** `CommandsContainer.resolve_first_cross_collision()` (called from
+  `_save`, step 3 of the fixup order) finds the first phrase held by two
+  DIFFERENT commands' current phrase lists and strips it from the command
+  *adding* it, keeping it on the command that already owns it. The keeper is
+  the command that had the phrase ON DISK (established owner); if neither did
+  (two commands added the same new phrase), the first in row order keeps it.
+  Detection is pure (`find_cross_collision`, EXACT-match, case-insensitive,
+  trimmed; slot phrases can't collide); the container supplies each editable
+  row's `{name, enabled, original, current}` and writes the trimmed list back
+  to the loser's box. `_show_cross_collision_block` (via `_frosted_alert`)
+  names the owner and advises removal; message text is `_build_cross_collision_message`.
+- **One at a time:** exactly one collision is resolved per Save (the first in
+  scan order); the modal blocks, and the next Save surfaces the next. This is
+  deliberate — no wall of collisions, and a fresh scan each time.
+- **Why auto-fix, not block (changed from the old hard block):** the phrase can
+  only ever fire the first-in-file-order command anyway (strict `>` tie-break in
+  `_score_segment`), and a *moved* phrase (dropped from A, added to B) is NOT a
+  collision because only *current* holders count. Established owners (including
+  built-in/system commands) are protected — a user can't strip a phrase off
+  `shutdown` by duplicating it. A disabled owner still keeps the phrase (and the
+  modal says so), consistent with "Disabled commands are matched but not
+  dispatched."
+- **Don't:** Reinstate the blocking `find_duplicate_phrases` /
+  `_build_block_message` / `_show_duplicate_block` path (now unused — candidates
+  for removal). Pick the keeper by scan order alone (that lets a user knock a
+  phrase off an established/system command). Count non-current (on-disk-only)
+  holders as collisions (breaks the legitimate move case). Import PySide6-bound
+  display helpers into commands.py (breaks `--emit-defaults`).
 
-### Save strips non-speakable characters from phrases
-- **What:** `SettingsDialog._save()` calls
-  `CommandsContainer.sanitize_phrases()` FIRST — before `collect()`, the
-  duplicate check, or any write. It removes every character that can't occur
-  in a Vosk transcription (allowed: letters, digits, spaces, and commas — the
-  phrase-list separator; other whitespace collapses to a single space). The
-  detection/cleaning string logic (`sanitize_phrase_text`) and the message
-  builder (`_build_invalid_chars_message`) are pure and Qt-free in
-  `core/commands.py`, unit-tested without a dialog; the dialog only presents.
-- **Behaviour:** If anything was stripped, the phrase boxes are updated in
-  place to the cleaned text, a warning modal ("Uh oh! That isn't gonna work.")
-  names each affected command and its now-clean phrases, and the save returns
-  early — exactly like the duplicate block. The next Save finds the boxes
-  clean and proceeds. Slot-pinned rows are skipped (their read-only field
-  holds the legitimate `{alias}` template).
-- **Why:** Punctuation/symbols in a phrase can never match speech (a dead
-  phrase), and `{...}` additionally routed the phrase through the slot matcher
-  (historically a crash vector — see "The matcher never raises…"). Forbidding
-  the whole class at save time is the UI-side complement to the runtime guard.
-- **Don't:** Strip on keystroke or paste (rejected — feels like a broken
-  field; the user types freely and finds out at save). Sanitize slot-pinned
-  rows. Treat this as a security boundary — a hand-edited config bypasses it,
+### Save auto-fixes phrases in a fixed order, each block-and-retry
+- **What:** `SettingsDialog._save()` runs three phrase guards, in this order,
+  BEFORE any write — each cleans the phrase boxes in place, shows a modal, and
+  returns early (the next Save re-runs them and, finding nothing, proceeds):
+  1. `sanitize_phrases()` — strips characters that can't occur in a Vosk
+     transcription. Allowed: letters, digits, spaces, and commas (the
+     phrase-list separator); other whitespace collapses to a single space.
+  2. `dedupe_phrases()` — drops phrases a single command lists more than once
+     (case-insensitive, trimmed; first spelling kept). Runs AFTER (1) so
+     "open dolphin!" and "open dolphin" are seen as the same phrase.
+  3. `resolve_first_cross_collision()` — the CROSS-command case (see next
+     invariant): a phrase two commands both hold is stripped from the command
+     ADDING it and kept on the one that already owns it. One per Save.
+- **Purity:** the detection/cleaning (`sanitize_phrase_text`,
+  `dedupe_phrase_text`, `find_cross_collision`) and every message builder
+  (`_build_invalid_chars_message`, `_build_duplicate_removed_message`,
+  `_build_cross_collision_message`) are pure and Qt-free in `core/commands.py`,
+  unit-tested without a dialog. Slot-pinned rows are skipped by all three —
+  their read-only field holds the legitimate `{alias}` template that
+  stripping/deduping would wrongly mangle.
+- **Why:** punctuation/symbols can never match speech (a dead phrase), and
+  `{...}` additionally routed the phrase through the slot matcher (a former
+  crash vector — see "The matcher never raises…"); a within-command duplicate
+  is silently redundant (the runtime matcher only ever fires the first). These
+  are the UI-side complement to the runtime guards.
+- **Don't:** Strip/dedupe on keystroke or paste (rejected — feels like a broken
+  field; the user types freely and finds out at save). Touch slot-pinned rows.
+  Treat any of this as a security boundary — a hand-edited config bypasses it,
   which is why the runtime matcher guard must stand independently.
+
+### Save-time block modals use `_frosted_alert`, not `QMessageBox`
+- **What:** Every save-time block modal (`_show_invalid_chars_block`,
+  `_show_dupe_removed_block`, `_show_duplicate_block`) routes through
+  `SettingsDialog._frosted_alert(title, body)`, which builds a `QDialog` using
+  the main window's frost recipe: `WA_TranslucentBackground` gated on
+  `blur_compositing_available()`, a `#frostPanel` child carrying the tint, and
+  `build_stylesheet(self._translucent)`.
+- **Why:** a plain `QMessageBox` (a top-level `QDialog`) does NOT paint its
+  background under `WA_TranslucentBackground` — it becomes a see-through hole
+  (the same reason the main window needs `#frostPanel`; verified empirically,
+  corner alpha 0). Styling the `QMessageBox` directly cannot fix this. So the
+  modals must be custom dialogs with their own frost panel to match the app.
+- **Don't:** Reintroduce a bare `QMessageBox` for these blocks (it won't match
+  the translucent window). Set the tint on the dialog instead of `#frostPanel`.
 
 ### `kwriteconfig6` calls use absolute path to kwinrc
 - **What:** Pass `os.path.expanduser("~/.config/kwinrc")` to
@@ -742,6 +769,26 @@ companion — keep them in sync.
 - **Don't:** Revert to `w in t`. Use `\b` (breaks punctuation-flanked words).
   Add PySide6/Vosk deps — `core/wake.py` is stdlib-only (`re`) with a pure-logic
   test suite (`tests/test_wake.py`); keep it that way.
+
+### Celery Man mutes the "computer" wake word for 100s after it runs
+- **What:** The `celery_man` system command opens a fixed YouTube URL whose audio
+  says "computer" repeatedly — which would trip the wake word. Its dedicated
+  action (`core/actions/apps.py::celery_man`) opens the URL, then sets
+  `context.wake_suppress_word = "computer"` and `context.wake_suppress_until =
+  now + 100`. The listener's SLEEPING wake checks (both the partial and the
+  finalized paths) pass `exclude=_muted_wake_words(context, now)` into
+  `WakeWordDetector.check()`, which skips the muted word's pattern. The mute is
+  purely time-based (no cleanup); it selectively drops ONLY "computer", so other
+  wake words (e.g. "hey dude") keep working during the window.
+- **Why a dedicated action, not `open_url` + args:** `open_url` is a user action
+  (`_USER_ACTIONS`), so a command using it renders in the User section as an
+  editable/deletable row, sorted alphabetically. A bespoke `celery_man` action
+  is a SYSTEM action — locked row, no arg editors (URL baked into the action, not
+  user-editable per the request), sorted by `_SYSTEM_COMMAND_ORDER` (added last).
+  URL + mute duration are constants in `apps.py`; update there if the video moves.
+- **Don't:** Route it through `open_url` (breaks the system-command tiering).
+  Reset/clear the suppression on a timer (the `now < until` check is enough).
+  Suppress ALL wake words (only "computer" needs muting).
 
 ### Verification gauntlet
 

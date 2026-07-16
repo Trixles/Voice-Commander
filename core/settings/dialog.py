@@ -67,12 +67,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QClipboard, QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QStyle, QTabWidget, QVBoxLayout,
+    QWidget,
 )
 
 from core.commands import (
     get_vosk_model_path, _default_commands,
-    find_duplicate_phrases, _build_block_message, _build_invalid_chars_message,
+    _build_invalid_chars_message, _build_duplicate_removed_message,
+    _build_cross_collision_message,
 )
 from core.aliases import (
     PINNED_SLOT as _PINNED_SLOT,
@@ -359,41 +361,95 @@ class SettingsDialog(QDialog):
         else:
             self._save_btn.setText("Save")
 
-    def _show_duplicate_block(self, dupes: list[dict]) -> None:
-        """Modal block shown when Save is refused due to duplicate phrases.
+    def _frosted_alert(self, title: str, body: str) -> None:
+        """Modal warning that matches the settings window's frosted-glass look.
 
-        Pure presentation -- the detection and wording live in core.commands
-        (Qt-free, unit-tested). PlainText so guillemets / quotes / '<' in a
-        user's phrase aren't parsed as HTML. Single dismiss button; the Save
-        button stays enabled so the user can fix the dup and retry."""
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("Can't save — duplicate phrase")
-        box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(_build_block_message(dupes))
-        ok = box.addButton("Got it", QMessageBox.ButtonRole.AcceptRole)
-        box.setDefaultButton(ok)
-        box.setEscapeButton(ok)
-        box.exec()
+        A plain QMessageBox can't: under WA_TranslucentBackground a top-level
+        dialog's own background doesn't paint -- it becomes a see-through hole
+        (see ARCHITECTURE 'Settings window translucency…'). So we reuse the
+        main window's recipe: WA_TranslucentBackground gated on the same blur
+        check, plus a `#frostPanel` child that carries the tint, with
+        build_stylesheet() painting it. The opaque build inherits the solid
+        panel instead. Used by every save-time block modal so they all match.
+
+        PlainText label so a user's phrase text (quotes, '<', stripped
+        punctuation echoed back) isn't parsed as HTML. Single 'Got it' button;
+        the Save button stays enabled so the user can eyeball the auto-fixed
+        boxes and Save again."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        if self._translucent:
+            dlg.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        dlg.setStyleSheet(build_stylesheet(self._translucent))
+
+        outer = QVBoxLayout(dlg)
+        outer.setContentsMargins(0, 0, 0, 0)
+        panel = QWidget()
+        panel.setObjectName("frostPanel")  # the one surface that carries frost
+        outer.addWidget(panel)
+
+        inner = QVBoxLayout(panel)
+        inner.setContentsMargins(22, 22, 22, 22)
+        inner.setSpacing(18)
+
+        # Warning icon beside the text -- parity with the QMessageBox it replaces.
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        icon = QLabel()
+        icon.setPixmap(
+            self.style()
+            .standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
+            .pixmap(44, 44)
+        )
+        icon.setAlignment(Qt.AlignmentFlag.AlignTop)
+        row.addWidget(icon)
+        text = QLabel(body)
+        text.setTextFormat(Qt.TextFormat.PlainText)
+        text.setWordWrap(True)
+        # FIXED width, not minimum: a word-wrapped QLabel only reports its true
+        # (wrapped) height once its width is pinned. With just a minimum width
+        # the dialog's initial sizeHint underestimates the height and exec()
+        # opens the window too short, clipping the text top and bottom. No
+        # stretch on the label for the same reason -- the width must stay fixed.
+        text.setFixedWidth(380)
+        row.addWidget(text)
+        inner.addLayout(row)
+
+        ok = QPushButton("Got it")
+        ok.setDefault(True)
+        ok.clicked.connect(dlg.accept)
+        inner.addWidget(ok, alignment=Qt.AlignmentFlag.AlignRight)
+
+        # Size to content and lock it: adjustSize() computes the height now that
+        # the label width is fixed; the minimum size stops KWin from opening it
+        # any smaller than its content.
+        dlg.adjustSize()
+        dlg.setMinimumSize(dlg.sizeHint())
+        dlg.exec()
+
+    def _show_cross_collision_block(self, info: dict) -> None:
+        """Shown when Save found a phrase two commands both claim. The phrase
+        has already been stripped from the offending command's box
+        (CommandsContainer.resolve_first_cross_collision) and kept on the one
+        that owns it; this names the owner and advises removal. Save again to
+        commit (or the next collision, if any, fires)."""
+        self._frosted_alert("Uh oh! That phrase is taken.",
+                            _build_cross_collision_message(info))
 
     def _show_invalid_chars_block(self, offenders: list[dict]) -> None:
-        """Modal shown when Save stripped non-speakable characters from phrases.
+        """Shown when Save stripped non-speakable characters. The phrase boxes
+        are already cleaned in place (CommandsContainer.sanitize_phrases), so
+        this returns the user to the dialog to eyeball the result and Save
+        again -- the second Save finds them clean and proceeds."""
+        self._frosted_alert("Uh oh! That isn't gonna work.",
+                            _build_invalid_chars_message(offenders))
 
-        Parallels _show_duplicate_block: the wording is built Qt-free in
-        core.commands and only presented here. The phrase boxes have already
-        been cleaned in place (CommandsContainer.sanitize_phrases), so this
-        block returns the user to the dialog to eyeball the result and Save
-        again -- the second Save finds them clean and proceeds. PlainText so
-        stripped characters shown in the message aren't parsed as HTML."""
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("Uh oh! That isn't gonna work.")
-        box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(_build_invalid_chars_message(offenders))
-        ok = box.addButton("Got it", QMessageBox.ButtonRole.AcceptRole)
-        box.setDefaultButton(ok)
-        box.setEscapeButton(ok)
-        box.exec()
+    def _show_dupe_removed_block(self, offenders: list[dict]) -> None:
+        """Shown when Save removed within-command duplicate phrases. Like the
+        invalid-chars block: boxes are already deduped in place
+        (CommandsContainer.dedupe_phrases); Save again to commit."""
+        self._frosted_alert("Uh oh! You listed that twice.",
+                            _build_duplicate_removed_message(offenders))
 
     def _autostart_is_enabled(self) -> bool | None:
         """Return True/False from `systemctl --user is-enabled` for the service,
@@ -448,17 +504,28 @@ class SettingsDialog(QDialog):
             self._show_invalid_chars_block(invalid)
             return
 
-        commands = self._commands_container.collect()
-
-        # Hard guard: two commands cannot share an exact phrase. Only the first
-        # in file order would ever fire; the rest are silently shadowed (and a
-        # disabled command still wins the match -- see _score_segment). Block
-        # the save and name the offenders. Returns BEFORE any write, so every
-        # pending edit stays in the dialog for the user to fix and retry.
-        dupes = find_duplicate_phrases(commands)
-        if dupes:
-            self._show_duplicate_block(dupes)
+        # Then drop phrases a single command lists more than once. This is the
+        # WITHIN-command case; the cross-command collision resolver below only
+        # sees phrases held by two DIFFERENT commands. Auto-fix + notify + return
+        # early. Runs after char-stripping so "open dolphin!" and "open dolphin"
+        # are seen as the same phrase.
+        dupe_removed = self._commands_container.dedupe_phrases()
+        if dupe_removed:
+            self._show_dupe_removed_block(dupe_removed)
             return
+
+        # Then the CROSS-command case: two commands can't share a phrase (only
+        # the first in file order would ever fire; the rest are silently
+        # shadowed -- and a disabled command still wins the match, see
+        # _score_segment). Strip the phrase from the command trying to ADD it,
+        # keep it on the one that already owns it, and tell the user. Same
+        # block-and-retry flow; one collision per Save (the next fires next time).
+        collision = self._commands_container.resolve_first_cross_collision()
+        if collision:
+            self._show_cross_collision_block(collision)
+            return
+
+        commands = self._commands_container.collect()
 
         overrides = self._overrides_container.collect()
         disabled_default_overrides = self._overrides_container.collect_disabled_defaults()

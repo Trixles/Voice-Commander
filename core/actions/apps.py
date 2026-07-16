@@ -48,6 +48,28 @@ def open_url(url: str, gui_env: dict, browser: str = "", context=None) -> None:
         context.update(last_command_name="open_url")
 
 
+# Baked-in, deliberately not user-editable (see the Celery Man system command).
+# Update here if the video ever moves -- it's been up since 2013, so: unlikely.
+CELERY_MAN_URL = "https://www.youtube.com/watch?v=maAFcEU6atk"
+CELERY_MAN_WAKE_MUTE_SECONDS = 100
+
+
+def celery_man(gui_env: dict, context=None) -> None:
+    """Load up Celery Man.
+
+    Opens the video, then mutes the "computer" wake word for
+    CELERY_MAN_WAKE_MUTE_SECONDS seconds -- the video says "computer" several
+    times and would otherwise trip the wake word and start listening. The
+    listener honours context.wake_suppress_* in the SLEEPING state.
+    """
+    open_url(CELERY_MAN_URL, gui_env=gui_env, context=context)
+    if context:
+        context.update(
+            wake_suppress_word="computer",
+            wake_suppress_until=time.time() + CELERY_MAN_WAKE_MUTE_SECONDS,
+        )
+
+
 def launch_app(app: str, gui_env: dict, context=None) -> None:
     """Launch an application by executable name."""
     run_bg([app], env=gui_env, detach=True)

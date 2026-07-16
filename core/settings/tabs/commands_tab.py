@@ -36,7 +36,9 @@ from PySide6.QtWidgets import (
 )
 
 from core.aliases import PINNED_SLOT as _PINNED_SLOT
-from core.commands import sanitize_phrase_text
+from core.commands import (
+    sanitize_phrase_text, dedupe_phrase_text, find_cross_collision,
+)
 from core.env import blur_compositing_available
 from core.settings.helpers import (
     APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY,
@@ -773,18 +775,17 @@ class CommandsContainer(QWidget):
             "the command name, which action it will perform, and its activation "
             "phrases. Click the Options button to edit an existing command's "
             "activation phrases.\n\n"
-            "Commands can be executed on a specific display by saying \"on\" "
-            "and a monitor's alias (e.g., \"Open Dolphin on monitor three\"). "
-            "Monitor aliases can be edited in the Displays tab.\n\n"
+            "Commands can be executed on a specific display by saying a command "
+            "phrase immediately followed by \"on\" and a monitor's alias (e.g., "
+            "\"open Dolphin on monitor three\"). Monitor aliases can be edited "
+            "in the Displays tab.\n\n"
             "Multiple commands can be chained together by separating them "
-            "with \"and\" (e.g., \"open Dolphin and open Reddit\").\n\n"
-            "Note: phrases can only contain letters, numbers, and spaces "
-            "(use commas to separate multiple phrases) — you can't speak "
-            "punctuation, so anything else is removed when you save. Phrases "
-            "also can't start with \"the\" (it's stripped automatically), and "
-            "two \"open URL\" commands chained together can't be aimed at "
-            "multiple different displays, due to how window placement is "
-            "handled for browsers/new tabs."
+            "with \"and\" (e.g., \"open Dolphin and open Reddit\"). One "
+            "exception: two \"open URL\" commands chained together cannot be "
+            "aimed at multiple different displays, due to how Plasma handles "
+            "window placement for new browsers/tabs.\n\n"
+            "Note: command phrases can only contain letters, numbers, and "
+            "spaces (use commas to separate multiple phrases)."
         )
         user_blurb.setWordWrap(True)
         user_blurb.setStyleSheet(_BLURB_CSS)
@@ -957,6 +958,58 @@ class CommandsContainer(QWidget):
                 continue
             raw = row._phrases_edit.toPlainText()
             cleaned, removed = sanitize_phrase_text(raw)
+            if not removed:
+                continue
+            row._phrases_edit.setPlainText(cleaned)
+            offenders.append({
+                "name": row._name_edit.text().strip() or "Untitled",
+                "cleaned": cleaned,
+                "removed": removed,
+            })
+        return offenders
+
+    def resolve_first_cross_collision(self) -> dict | None:
+        """Auto-fix the first cross-command duplicate phrase, or None if clean.
+
+        Runs at Save, after the within-command passes. Two commands can't share
+        a phrase (only the first in file order would ever fire), so the phrase
+        is stripped from the command that's trying to ADD it and kept on the one
+        that already owns it. Detection is pure (find_cross_collision); here we
+        just supply each editable row's data and, on a hit, write the trimmed
+        phrase list back to the offending row's box. Slot-pinned rows are
+        skipped (their slot phrases can't collide). One collision per call --
+        the caller blocks and the next Save surfaces the next."""
+        rows = [r for r in self._rows if not r._is_slot_pinned]
+        payload = [{
+            "name": r._name_edit.text().strip() or "Untitled",
+            "enabled": (r._enable_toggle.isChecked()
+                        if r._enable_toggle is not None else True),
+            "original": r._cmd.get("phrases", []),
+            "current": [p.strip() for p in r._phrases_edit.toPlainText().split(",")
+                        if p.strip()],
+        } for r in rows]
+
+        info = find_cross_collision(payload)
+        if info is None:
+            return None
+        rows[info["loser_index"]]._phrases_edit.setPlainText(info["loser_cleaned"])
+        return info
+
+    def dedupe_phrases(self) -> list[dict]:
+        """Remove phrases listed more than once within a single command's box.
+
+        Runs at Save, after sanitize_phrases() and before the cross-command
+        collision pass. Same shape and contract as sanitize_phrases: mutates
+        each offending row's box in place to the deduped text and returns one
+        entry per affected command (``{"name", "cleaned", "removed": [..]}``).
+        Skips slot-pinned rows (read-only). This is the WITHIN-command case;
+        cross-command collisions are handled by resolve_first_cross_collision."""
+        offenders: list[dict] = []
+        for row in self._rows:
+            if row._is_slot_pinned:
+                continue
+            raw = row._phrases_edit.toPlainText()
+            cleaned, removed = dedupe_phrase_text(raw)
             if not removed:
                 continue
             row._phrases_edit.setPlainText(cleaned)

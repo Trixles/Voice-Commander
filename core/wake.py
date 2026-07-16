@@ -37,17 +37,27 @@ class WakeWordDetector:
         #                 like "c++" is matched literally, not as a pattern.
         #   \s+ join   -- a multi-word phrase ("hey computer") tolerates any run
         #                 of whitespace between its tokens.
-        self._patterns = []
+        # Stored as (word, pattern) pairs so `check` can exclude specific wake
+        # words on demand (the Celery Man command mutes "computer" for a while).
+        self._patterns: list[tuple[str, re.Pattern]] = []
         for w in self.wake_words:
             if not w:  # skip blank entries; an empty pattern would match all
                 continue
             tokens = [re.escape(tok) for tok in w.split()]
             body = r"\s+".join(tokens)
-            self._patterns.append(re.compile(r"(?<!\w)" + body + r"(?!\w)"))
+            self._patterns.append((w, re.compile(r"(?<!\w)" + body + r"(?!\w)")))
 
-    def check(self, text: str) -> bool:
+    def check(self, text: str, exclude=()) -> bool:
+        """True if any (non-excluded) wake word occurs as a whole word in text.
+
+        `exclude` is an iterable of wake words to ignore for this call --
+        normalized the same way as the stored words -- so a temporarily muted
+        wake word doesn't count. An excluded word that isn't a configured wake
+        word is simply a no-op.
+        """
         t = text.lower()
-        return any(p.search(t) for p in self._patterns)
+        muted = {" ".join(w.lower().split()) for w in exclude}
+        return any(p.search(t) for w, p in self._patterns if w not in muted)
 
     def is_wake_only(self, text: str) -> bool:
         """True iff `text` contains a wake word and nothing else of substance.
@@ -67,6 +77,6 @@ class WakeWordDetector:
         t = text.lower().strip()
         if not self.check(t):
             return False
-        for p in self._patterns:
+        for _w, p in self._patterns:
             t = p.sub(" ", t)
         return not t.strip()

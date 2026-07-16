@@ -125,7 +125,43 @@ if (typeof _handlerRegistered === "undefined") {
             return;
         }
 
+        // Move now. sendClientToScreen SILENTLY NO-OPS when the window is
+        // still too early in its initial setup (confirmed by instrumentation:
+        // on failing runs, window.output is unchanged immediately after the
+        // call, with no later outputChanged — KWin never overrides us, the
+        // call itself just doesn't take). Whether it takes is checkable
+        // synchronously via window.output, so: move, check, and if it didn't
+        // stick, re-assert on the window's own frameGeometryChanged signal,
+        // which fires as the window finishes its initial configure. Fully
+        // event-driven — no timers, and the common case (call takes) costs
+        // nothing extra.
+        var want = entry.output;
         workspace.sendClientToScreen(window, target);
+        if (window.output && window.output.name === want) {
+            return; // took immediately -- the fast path, and we're done
+        }
+
+        // Bounded re-assert: correct ONLY the initial placement, then get out
+        // of the way. The attempt cap means that even if the output can never
+        // be reached (e.g. unplugged mid-flight), we stop long before a user
+        // could be dragging the window around and find us fighting them.
+        var attempts = 0;
+        var MAX_ATTEMPTS = 20;
+        var reassert = function() {
+            attempts++;
+            var cur = window.output ? window.output.name : null;
+            if (cur !== want && attempts <= MAX_ATTEMPTS) {
+                workspace.sendClientToScreen(window, target);
+                cur = window.output ? window.output.name : null;
+            }
+            if (cur === want || attempts >= MAX_ATTEMPTS) {
+                window.frameGeometryChanged.disconnect(reassert);
+                print("[vc-window-placer] re-assert " +
+                      (cur === want ? "landed on " + want : "gave up") +
+                      " after " + attempts + " geometry change(s)");
+            }
+        };
+        window.frameGeometryChanged.connect(reassert);
     });
 
     print("[vc-window-placer] windowAdded handler registered");

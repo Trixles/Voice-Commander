@@ -575,6 +575,31 @@ companion — keep them in sync.
   one). Assume one path working proves the other — test both when
   changing anything monitor-related.
 
+### `sendClientToScreen` at `windowAdded` can silently no-op — placer verifies and re-asserts
+- **What:** On the `nextScreen` (arriving-window) path, the placer calls
+  `sendClientToScreen`, then synchronously checks `window.output.name`.
+  If the move didn't take, it re-asserts on the window's
+  `frameGeometryChanged` signal, disconnecting the moment the window
+  lands on the wanted output (or after 20 geometry events, whichever
+  first). The re-assert path logs one journal line; the fast path logs
+  nothing extra.
+- **Why:** KWin's `sendClientToScreen` silently does nothing when called
+  while a window is still in its initial setup — `windowAdded` sometimes
+  fires that early, so placement raced against how fast the app mapped
+  its window (the since-0.1.0 intermittent "wrong monitor" bug, confirmed
+  by instrumentation 2026-07-16: on failing runs `window.output` was
+  unchanged immediately after the call, with no later `outputChanged`).
+  `frameGeometryChanged` fires during the window's initial configure, so
+  the retry is event-driven — the earliest possible correction, no timers.
+  The attempt cap + immediate disconnect guarantee it corrects initial
+  placement only and can never fight a user dragging the window later.
+  `moveActive` doesn't need this: it targets an already-mapped, settled
+  window.
+- **Don't:** Replace the re-assert with a timer/sleep. Drop the
+  post-move `window.output` check (the fast path must stay free).
+  Leave the handler connected after success. Add re-assert to
+  `moveActive` (unneeded; would double-fling on user drags).
+
 ### Chains partial-execute; rule rejections abort wholesale
 - **What:** `_match_chain_segments` scores each segment into one of
   three shapes: a real match `(cmd, args, target)`, a disabled sentinel

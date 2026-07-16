@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] &mdash; 2026-07-16
+
+### Fixed
+- **"Open X on {monitor}" intermittently landed the window on the wrong
+  display.** The KWin placer issued the correct move every time, but KWin's
+  `sendClientToScreen` silently does nothing when called while a window is
+  still in its initial setup &mdash; so placement depended on a race against
+  how fast the app mapped its window. The placer now checks whether the move
+  actually took and, if not, re-asserts it on the window's next geometry
+  commit (event-driven; no timers, no added latency, and it stands down the
+  moment the window lands so it can never fight a manual drag). Affected all
+  apps and chained commands; present since 0.1.0 as the "wrong monitor"
+  known issue.
+
 ## [1.0.0] &mdash; 2026-07-15
 
 First stable release. The command set, config format, and settings UI are
@@ -459,7 +473,8 @@ Initial public release.
   affects any external tool trying to place these browsers. Workaround:
   open the browser first, then use `"move to {monitor}"` to relocate it.
 
-[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Trixles/Voice-Commander/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Trixles/Voice-Commander/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/Trixles/Voice-Commander/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/Trixles/Voice-Commander/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Trixles/Voice-Commander/compare/v0.7.0...v0.8.0

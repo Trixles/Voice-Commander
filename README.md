@@ -5,7 +5,7 @@
 ![Speech: Vosk (offline)](https://img.shields.io/badge/speech-Vosk%20(offline)-success.svg)
 
 A voice control app for KDE Plasma 6 on Wayland. Say a wake word, then a
-command, and it does the thing. Create custom commands to open applications, files, or URLS, or even run shell code!
+command, and it does the thing. Create custom commands to open applications, files, or URLs, or run shell code.
 Speech recognition happens entirely on your machine, so there's no account
 to create and nothing gets sent anywhere.
 
@@ -52,9 +52,7 @@ move a window to another monitor, that kind of thing) and then does it.
 Speech recognition happens entirely on your computer using an open-source
 recognition engine called Vosk. Nothing you say is sent anywhere. The only
 time Voice Commander needs the internet at all is during installation, to
-download the recognition model. After that it works completely offline
-(commands that open a website obviously still need a connection to reach
-that website).
+download the recognition model. After that it works completely offline.
 
 Everything is configurable from the settings window, but if you'd rather
 hand-edit the config, it's stored as plain JSON. No fighting a GUI required

@@ -349,6 +349,40 @@ companion — keep them in sync.
   socket name. Drop the `singleton` reference. Make a failed `listen()`
   abort startup.
 
+### App-menu launches route through `--activate`; the lock socket carries messages
+- **What:** The `.desktop` entry's Exec is `voice-commander --activate`
+  (written by `install.sh`). The flag (handled in `voice_commander.py`
+  before the Vosk import, like `--version`; logic in `core/activate.py`)
+  does one of two things: a running instance holds the lock → send it
+  `open-settings` over the lock socket and exit (the instance pops/raises
+  Settings via the tray's `_open_settings`, which already raise-focuses an
+  open dialog); nobody listening → `systemctl --user start
+  voice-commander.service` and exit. Server side, `handle_pending`
+  (`core/activate.py`) replaced the old read-nothing `_drain_pending`: one
+  line read per connection, `open-settings` fires the callback, empty/unknown
+  messages just close (so plain terminal-launch probes behave as before).
+  Tray → Quit checks `INVOCATION_ID` (systemd sets it): service-launched
+  quits via `systemctl --user stop` (with a 3s `QApplication.quit` fallback
+  timer), terminal-launched quits directly.
+- **Why:** The GUI path must NEVER run the app standalone. An app-menu click
+  during `install.sh`'s service-restart gap once grabbed the lock as a
+  transient `app-…@….service` unit; every service start for the next 3 hours
+  exited "Already running" (journal-only — invisible), which presented as a
+  broken installer (2026-07-16). Routing GUI launches through systemd makes
+  the race structurally impossible, and the activation message gives the
+  user the tray-app convention they expect: second launch = show the app.
+- **Why the tray-holder indirection:** the lock is acquired before the tray
+  exists (deliberately, see the invariant above); `_tray_holder` routes
+  `open-settings` to the tray once created and silently drops activations
+  during the model-load window (nothing to show yet).
+- **Don't:** Put the Qt imports at `core/activate.py` module top (it must
+  stay cheap to import and headless-testable). Make `--activate` run the app
+  standalone as a fallback. Have the plain (flagless) terminal launch call
+  systemctl — it's the dev/debug path and stays standalone on purpose.
+  Create a bare `QCoreApplication` in any test (one app object kind per
+  process; GUI tests crash after it — use the shared
+  `QApplication.instance() or QApplication([])` pattern).
+
 ### Install architecture: code lives in `~/.local/share/voice-commander/app/`
 - **What:** `install.sh` copies repo source to the XDG data dir; the
   systemd service runs from there. User can clone anywhere, install,
@@ -795,25 +829,36 @@ companion — keep them in sync.
   Add PySide6/Vosk deps — `core/wake.py` is stdlib-only (`re`) with a pure-logic
   test suite (`tests/test_wake.py`); keep it that way.
 
-### Celery Man mutes the "computer" wake word for 100s after it runs
-- **What:** The `celery_man` system command opens a fixed YouTube URL whose audio
-  says "computer" repeatedly — which would trip the wake word. Its dedicated
-  action (`core/actions/apps.py::celery_man`) opens the URL, then sets
-  `context.wake_suppress_word = "computer"` and `context.wake_suppress_until =
-  now + 100`. The listener's SLEEPING wake checks (both the partial and the
-  finalized paths) pass `exclude=_muted_wake_words(context, now)` into
-  `WakeWordDetector.check()`, which skips the muted word's pattern. The mute is
-  purely time-based (no cleanup); it selectively drops ONLY "computer", so other
-  wake words (e.g. "hey dude") keep working during the window.
+### Celery Man echo guard: MPRIS playing-check, not wake-word muting
+- **What:** The clip's own audio says its launch phrase ("computer, load up
+  celery man please"), so unguarded it would launch copies of itself. The
+  dedicated action (`core/actions/apps.py::celery_man`) guards by asking
+  reality, not a timer: `_celery_man_is_playing()` runs one `playerctl -a
+  metadata` call (playerctl is already a hard dependency — pause/resume) and
+  blocks the command iff some MPRIS player reports status `Playing` with the
+  video ID in `xesam:url` (fallback: "celery man" in `xesam:title`, for
+  browsers that don't expose url). Paused doesn't count — no audio, no echo.
+  The check FAILS OPEN (playerctl missing/erroring/no players → fire
+  normally) and runs only when celery_man matches, so it costs other
+  commands nothing. NO wake words are muted; every command stays usable
+  while the video plays, and the guard ends the instant the video does.
+  A blocked echo is FULLY SILENT: the action returns `False`, and
+  `_dispatch` treats an action returning `False` as "declined" — no
+  notification, no cooldown stamp, no `>>` log line (a ghost "Loading up
+  Celery Man" toast mid-video read as a malfunction). This replaced the
+  1.0.0 design (mute the "computer" wake word 100s via
+  `context.wake_suppress_*` + `WakeWordDetector.check(exclude=…)`); that
+  plumbing is fully removed — don't resurrect it from old commits.
 - **Why a dedicated action, not `open_url` + args:** `open_url` is a user action
   (`_USER_ACTIONS`), so a command using it renders in the User section as an
   editable/deletable row, sorted alphabetically. A bespoke `celery_man` action
   is a SYSTEM action — locked row, no arg editors (URL baked into the action, not
   user-editable per the request), sorted by `_SYSTEM_COMMAND_ORDER` (added last).
-  URL + mute duration are constants in `apps.py`; update there if the video moves.
+  The URL is a constant in `apps.py`; update there if the video moves.
 - **Don't:** Route it through `open_url` (breaks the system-command tiering).
-  Reset/clear the suppression on a timer (the `now < until` check is enough).
-  Suppress ALL wake words (only "computer" needs muting).
+  Replace the playing-check with a timer. Match on the full URL (players
+  append params; match the video ID). Fail CLOSED on playerctl errors (a
+  broken check must never block the command). Treat `Paused` as playing.
 
 ### Verification gauntlet
 

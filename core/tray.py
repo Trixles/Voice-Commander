@@ -113,11 +113,39 @@ class VoiceCommanderTray:
 
         return menu
 
+    def _raise_settings(self) -> None:
+        """Raise + focus the already-open Settings window.
+
+        On Wayland, raise_()/activateWindow() from outside the focused app
+        are blocked by KWin's focus-stealing prevention -- Qt falls back to
+        marking the window "demands attention" (focused-but-not-raised was
+        the observed symptom). So after asking politely, fire KWin's own
+        'Activate Window Demanding Attention' shortcut, which activates AND
+        raises it. Same proven trick as apps._raise_browser. The short delay
+        lets the demands-attention mark land first.
+        """
+        self._settings_dlg.raise_()
+        self._settings_dlg.activateWindow()
+
+        def _kick():
+            from core.env import GUI_ENV
+            from core.run import run_bg
+            run_bg(
+                [
+                    "dbus-send", "--session", "--print-reply",
+                    "--dest=org.kde.kglobalaccel",
+                    "/component/kwin",
+                    "org.kde.kglobalaccel.Component.invokeShortcut",
+                    "string:Activate Window Demanding Attention",
+                ],
+                env=GUI_ENV,
+            )
+        QTimer.singleShot(100, _kick)
+
     def _open_settings(self) -> None:
         from core.settings import SettingsDialog
         if self._settings_dlg is not None and self._settings_dlg.isVisible():
-            self._settings_dlg.raise_()
-            self._settings_dlg.activateWindow()
+            self._raise_settings()
             return
         self._settings_dlg = SettingsDialog(self._dummy_parent)
         self._settings_dlg.show()
@@ -126,8 +154,7 @@ class VoiceCommanderTray:
         """Open the Settings dialog and switch to the Log tab."""
         from core.settings import SettingsDialog
         if self._settings_dlg is not None and self._settings_dlg.isVisible():
-            self._settings_dlg.raise_()
-            self._settings_dlg.activateWindow()
+            self._raise_settings()
         else:
             self._settings_dlg = SettingsDialog(self._dummy_parent)
             self._settings_dlg.show()
@@ -155,4 +182,14 @@ class VoiceCommanderTray:
 
     def _quit(self) -> None:
         self._command_queue.put("quit")
-        QApplication.quit()
+        # Launched by systemd (it sets INVOCATION_ID)? Then quit BY stopping
+        # the unit, so systemd records an intentional stop instead of watching
+        # the process vanish -- no loose ends in `systemctl status`. systemd's
+        # SIGTERM ends us; the timer below is a fallback in case the stop
+        # command itself fails. Terminal launches just quit directly.
+        if os.environ.get("INVOCATION_ID"):
+            from core.run import run_bg
+            run_bg(["systemctl", "--user", "stop", "voice-commander.service"])
+            QTimer.singleShot(3000, QApplication.quit)
+        else:
+            QApplication.quit()

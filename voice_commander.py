@@ -28,6 +28,17 @@ if __name__ == "__main__" and len(sys.argv) == 2 and sys.argv[1] in ("--version"
     print(f"voice-commander {__version__}")
     sys.exit(0)
 
+# --activate is the app-menu path (the .desktop Exec line carries it): tell a
+# running instance to open Settings, or start the systemd service if nothing
+# is running. Handled before the Vosk import for the same instant-exit reason
+# as --version -- and crucially, this path NEVER runs the app standalone, so
+# an app-menu click can't steal the single-instance lock from the service.
+if __name__ == "__main__" and len(sys.argv) == 2 and sys.argv[1] == "--activate":
+    from PySide6.QtCore import QCoreApplication
+    from core.activate import activate
+    _qt = QCoreApplication.instance() or QCoreApplication(sys.argv)
+    sys.exit(activate())
+
 import vosk
 from PySide6.QtWidgets import QApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -44,22 +55,23 @@ from core.actions.windows import refresh_monitor_map
 
 # -- Single-instance guard ---------------------------------------------------
 
-# Per-user socket name. The systemd --user service and any terminal launch
-# share a UID, so this name collides between them by design -- that collision
-# is exactly what stops a second listener + duplicate tray icon from starting.
-_SINGLE_INSTANCE_NAME = f"voice-commander-{os.getuid()}"
+# The per-user socket name lives in core/activate.py (shared with the
+# --activate sender). The service and any terminal launch share a UID, so the
+# name collides between them by design -- that collision IS the guard.
+from core.activate import SINGLE_INSTANCE_NAME as _SINGLE_INSTANCE_NAME
+from core.activate import handle_pending as _handle_pending
+
+# Set once the tray exists; the lock socket's connection handler routes
+# "open-settings" messages here. Between lock acquisition and tray creation
+# (the model-load window) an activation is silently dropped -- the app is
+# literally starting, there is nothing to show yet.
+_tray_holder: dict = {"tray": None}
 
 
-def _drain_pending(server: QLocalServer) -> None:
-    """Close probe connections from would-be second instances.
-
-    They only need to know *someone* answered; we don't read from them. Drain
-    them so they don't pile up as pending sockets for the process lifetime.
-    """
-    while server.hasPendingConnections():
-        conn = server.nextPendingConnection()
-        conn.disconnectFromServer()
-        conn.deleteLater()
+def _open_settings_if_ready() -> None:
+    tray = _tray_holder["tray"]
+    if tray is not None:
+        tray._open_settings()
 
 
 def _acquire_single_instance() -> QLocalServer | None:
@@ -94,7 +106,8 @@ def _acquire_single_instance() -> QLocalServer | None:
             file=sys.stderr,
         )
         return server
-    server.newConnection.connect(lambda: _drain_pending(server))
+    server.newConnection.connect(
+        lambda: _handle_pending(server, _open_settings_if_ready))
     return server
 
 
@@ -207,6 +220,7 @@ def main() -> None:
 
     # Qt main thread (app + single-instance lock were set up at the top).
     tray = VoiceCommanderTray(state_queue, command_queue)
+    _tray_holder["tray"] = tray  # lock socket can now route "open-settings"
     sys.exit(app.exec())
 
 

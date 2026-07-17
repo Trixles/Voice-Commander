@@ -345,7 +345,7 @@ install_desktop_file() {
 Type=Application
 Name=Voice Commander
 Comment=Hands-free voice control for your desktop
-Exec=${BIN_DIR}/${APP_NAME}
+Exec=${BIN_DIR}/${APP_NAME} --activate
 Icon=${ICONS_DIR}/vc-sleeping.svg
 Terminal=false
 Categories=Utility;AudioVideo;

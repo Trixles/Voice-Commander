@@ -394,7 +394,10 @@ strict overall, adjust Recognition Strictness in [Options](#options).
 **Commands go to the wrong monitor, or don't move at all.** Make sure the
 monitor has a name set on the [Displays](#displays) tab, and that you're
 running KDE Plasma 6. Multi-monitor support depends on a Plasma-specific
-helper script that only installs there.
+helper script that only installs there. If your aliases are set up and
+windows still *sometimes* land on the wrong monitor, you're on a version
+older than 1.0.1, which fixed exactly that bug. `git pull` and re-run
+`./install.sh`.
 
 **`voice-commander` command not found in a terminal.** `~/.local/bin`
 isn't on your `PATH`. Add it in your shell's config file (`~/.bashrc`,

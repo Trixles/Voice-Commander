@@ -28,11 +28,6 @@ class Context:
         self.last_monitor: int | None = None
         self.pending_confirm: dict | None = None   # command dict awaiting confirmation
         self.pending_args: dict | None = None      # resolved args for pending command
-        # Wake-word suppression: while now < wake_suppress_until, the listener
-        # ignores wake_suppress_word in the SLEEPING state. Set by the Celery
-        # Man command (its video says "computer" and would trip the wake word).
-        self.wake_suppress_word: str | None = None
-        self.wake_suppress_until: float = 0.0
 
     def update(self, **kwargs):
         for k, v in kwargs.items():

@@ -1129,7 +1129,11 @@ def _dispatch(cmd: dict, resolved_args: dict, gui_env: dict, context) -> None:
     merged["context"] = context
 
     print(f"[commands] Dispatching '{cmd['name']}'")
-    fn(**merged)
+    if fn(**merged) is False:
+        # The action declined to run (e.g. Celery Man's echo guard) and has
+        # already logged why. Suppress the fired-notification, cooldown stamp,
+        # and ">>" log line -- nothing happened, so nothing gets announced.
+        return
 
     summary = _build_notification(action_name, merged, gui_env)
     _last_fired[cmd["name"]] = time.time()

@@ -1,17 +1,23 @@
 """
 tests/test_celery_man.py
 ========================
-The Celery Man system command: it opens a fixed video URL and mutes the
-"computer" wake word for a stretch afterwards (the video says "computer"
-several times and would otherwise trip the wake word). See core/actions/apps.py
-(celery_man), core/commands.py (default + registry), core/wake.py (exclude).
+The Celery Man system command: it opens a fixed video URL, unless that video
+is ALREADY playing in a browser -- the clip's own audio says the command
+phrase ("computer, load up celery man please"), so without a guard it would
+echo-launch copies of itself. The guard asks playerctl (MPRIS) whether any
+player is currently Playing the video, matched by video ID in the URL or by
+title. No wake words are muted; the check runs only when celery_man fires and
+fails OPEN (a broken/missing playerctl must never block the command).
+
+See core/actions/apps.py (celery_man, _celery_man_is_playing) and
+core/commands.py (default + registry).
 
 Run from the repo root:  pytest -q
 """
 
 import os
+import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -20,30 +26,89 @@ from core.actions import apps  # noqa: E402
 from core.context import Context  # noqa: E402
 
 
-def test_action_opens_url_and_mutes_computer(monkeypatch):
-    """celery_man opens the baked-in URL and sets a ~100s 'computer' mute."""
+def _playerctl_result(stdout: str, returncode: int = 0):
+    """Fake CompletedProcess shaped like run_capture's return."""
+    return subprocess.CompletedProcess(
+        args=["playerctl"], returncode=returncode, stdout=stdout, stderr="",
+    )
+
+
+def _patch(monkeypatch, playerctl):
+    """Wire a fake playerctl (callable or result) and an open_url recorder."""
     opened = {}
     monkeypatch.setattr(
         apps, "open_url",
         lambda url, gui_env, browser="", context=None: opened.update(url=url),
     )
-    ctx = Context()
-    before = time.time()
-    apps.celery_man(gui_env={}, context=ctx)
-    after = time.time()
+    if callable(playerctl):
+        monkeypatch.setattr(apps, "run_capture", playerctl)
+    else:
+        monkeypatch.setattr(apps, "run_capture", lambda *a, **kw: playerctl)
+    return opened
+
+
+def test_action_opens_url_when_not_playing(monkeypatch):
+    """Video not playing: celery_man opens the URL (and returns non-False,
+    so the dispatcher announces it normally)."""
+    opened = _patch(monkeypatch, _playerctl_result("No players found", 1))
+    result = apps.celery_man(gui_env={}, context=Context())
 
     assert opened["url"] == apps.CELERY_MAN_URL
-    assert ctx.wake_suppress_word == "computer"
-    mute = apps.CELERY_MAN_WAKE_MUTE_SECONDS
-    assert before + mute <= ctx.wake_suppress_until <= after + mute
+    assert result is not False
+
+
+def test_echo_block_returns_false_to_suppress_notification(monkeypatch):
+    """A blocked echo must return False -- the dispatcher's cue to skip the
+    'Loading up Celery Man' toast, cooldown stamp, and log line entirely."""
+    line = f"Playing\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
+    _patch(monkeypatch, _playerctl_result(line))
+    assert apps.celery_man(gui_env={}, context=Context()) is False
+
+
+def test_echo_blocked_while_video_is_playing_by_url(monkeypatch):
+    """The clip echoing its own launch phrase must not open a second copy."""
+    line = f"Playing\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
+    opened = _patch(monkeypatch, _playerctl_result(line))
+    apps.celery_man(gui_env={}, context=Context())
+    assert opened == {}
+
+
+def test_echo_blocked_by_title_when_no_url_exposed(monkeypatch):
+    """Some browsers expose title but not URL over MPRIS -- title suffices."""
+    line = "Playing\t\tTim and Eric - CELERY MAN (HD)"
+    opened = _patch(monkeypatch, _playerctl_result(line))
+    apps.celery_man(gui_env={}, context=Context())
+    assert opened == {}
+
+
+def test_fires_when_video_is_paused(monkeypatch):
+    """Paused = no audio = no echo risk; a repeat command is genuinely the user."""
+    line = f"Paused\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
+    opened = _patch(monkeypatch, _playerctl_result(line))
+    apps.celery_man(gui_env={}, context=Context())
+    assert opened["url"] == apps.CELERY_MAN_URL
+
+
+def test_fires_when_other_media_is_playing(monkeypatch):
+    """Unrelated playing media must not block the command."""
+    line = "Playing\thttps://www.youtube.com/watch?v=dQw4w9WgXcQ\tsome other video"
+    opened = _patch(monkeypatch, _playerctl_result(line))
+    apps.celery_man(gui_env={}, context=Context())
+    assert opened["url"] == apps.CELERY_MAN_URL
+
+
+def test_fails_open_when_playerctl_missing(monkeypatch):
+    """A broken or absent playerctl must never block the command."""
+    def boom(*a, **kw):
+        raise FileNotFoundError("playerctl not on PATH")
+    opened = _patch(monkeypatch, boom)
+    apps.celery_man(gui_env={}, context=Context())
+    assert opened["url"] == apps.CELERY_MAN_URL
 
 
 def test_action_survives_missing_context(monkeypatch):
     """No context (shouldn't happen in practice) must not crash the action."""
-    monkeypatch.setattr(
-        apps, "open_url",
-        lambda url, gui_env, browser="", context=None: None,
-    )
+    _patch(monkeypatch, _playerctl_result("No players found", 1))
     apps.celery_man(gui_env={}, context=None)  # no raise
 
 

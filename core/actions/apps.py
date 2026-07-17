@@ -51,23 +51,61 @@ def open_url(url: str, gui_env: dict, browser: str = "", context=None) -> None:
 # Baked-in, deliberately not user-editable (see the Celery Man system command).
 # Update here if the video ever moves -- it's been up since 2013, so: unlikely.
 CELERY_MAN_URL = "https://www.youtube.com/watch?v=maAFcEU6atk"
-CELERY_MAN_WAKE_MUTE_SECONDS = 100
+# The YouTube video ID -- the invariant part of the URL. MPRIS players may
+# append params (t=, list=) to what they report, so match on this, not the
+# full URL.
+_CELERY_MAN_VIDEO_ID = CELERY_MAN_URL.split("v=")[-1]
 
 
-def celery_man(gui_env: dict, context=None) -> None:
+def _celery_man_is_playing(gui_env: dict) -> bool:
+    """
+    Return True if the Celery Man video is currently PLAYING in any MPRIS
+    media player (browsers expose playing tabs over MPRIS; playerctl is
+    already a hard dependency -- it drives the pause/resume commands).
+
+    Matched by video ID in the reported URL, falling back to the title for
+    browsers that don't expose xesam:url. Paused doesn't count: no audio
+    means no echo, so a repeat command is genuinely the user.
+
+    Fails OPEN: if playerctl is missing, errors, or reports no players, the
+    command fires normally -- a broken check must never block the command.
+    """
+    try:
+        result = run_capture(
+            ["playerctl", "-a", "metadata", "--format",
+             "{{status}}\t{{xesam:url}}\t{{xesam:title}}"],
+            env=gui_env, timeout=3,
+        )
+    except Exception as e:
+        print(f"[apps] celery_man playing-check failed ({e}); firing anyway")
+        return False
+    if result.returncode != 0:  # typically "No players found"
+        return False
+    for line in result.stdout.splitlines():
+        status, _, rest = line.partition("\t")
+        if status.strip() != "Playing":
+            continue
+        url, _, title = rest.partition("\t")
+        if _CELERY_MAN_VIDEO_ID in url or "celery man" in title.lower():
+            return True
+    return False
+
+
+def celery_man(gui_env: dict, context=None):
     """Load up Celery Man.
 
-    Opens the video, then mutes the "computer" wake word for
-    CELERY_MAN_WAKE_MUTE_SECONDS seconds -- the video says "computer" several
-    times and would otherwise trip the wake word and start listening. The
-    listener honours context.wake_suppress_* in the SLEEPING state.
+    Echo guard: the clip's own audio says "computer, load up celery man
+    please" -- without a guard it would launch copies of itself. If the video
+    is already playing (per _celery_man_is_playing), the command that matched
+    is the video echoing, so decline by returning False -- the dispatcher then
+    suppresses the notification and log line too, so an echo is fully silent.
+    No wake words are muted; every other command stays fully usable while the
+    video plays, and the guard ends the instant the video does.
     """
+    if _celery_man_is_playing(gui_env):
+        print("[apps] celery_man: video already playing -- echo blocked")
+        return False
     open_url(CELERY_MAN_URL, gui_env=gui_env, context=context)
-    if context:
-        context.update(
-            wake_suppress_word="computer",
-            wake_suppress_until=time.time() + CELERY_MAN_WAKE_MUTE_SECONDS,
-        )
 
 
 def launch_app(app: str, gui_env: dict, context=None) -> None:

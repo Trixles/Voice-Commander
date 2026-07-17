@@ -186,17 +186,6 @@ def _is_cancel(text: str) -> bool:
     return any(phrase in text for phrase in CANCEL_PHRASES)
 
 
-def _muted_wake_words(context, now: float) -> tuple:
-    """Wake words to ignore right now, per an active suppression window.
-
-    The Celery Man command sets context.wake_suppress_word/until so the video's
-    own "computer" lines don't trip the wake word. Returns () once the window
-    has passed (or was never set), so normal wake detection resumes."""
-    if context.wake_suppress_word and now < context.wake_suppress_until:
-        return (context.wake_suppress_word,)
-    return ()
-
-
 # -- Core listener loop -------------------------------------------------------
 
 def run_listener(
@@ -340,7 +329,7 @@ def run_listener(
             # OPEN_MIC has no window; CONFIRMING is unaffected.
             partial = json.loads(rec.PartialResult()).get("partial", "").strip()
             if context.state == State.SLEEPING:
-                if partial and detector.check(partial, exclude=_muted_wake_words(context, now)):
+                if partial and detector.check(partial):
                     command_window = commands.get_command_window()
                     print("[listener] Wake word detected (partial).")
                     LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
@@ -371,7 +360,7 @@ def run_listener(
         # -- State machine ----------------------------------------------------
 
         if context.state == State.SLEEPING:
-            if not detector.check(text, exclude=_muted_wake_words(context, now)):
+            if not detector.check(text):
                 continue
 
             print("[listener] Wake word detected.")

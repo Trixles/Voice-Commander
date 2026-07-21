@@ -39,7 +39,6 @@ if __name__ == "__main__" and len(sys.argv) == 2 and sys.argv[1] == "--activate"
     _qt = QCoreApplication.instance() or QCoreApplication(sys.argv)
     sys.exit(activate())
 
-import vosk
 from PySide6.QtWidgets import QApplication
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
@@ -47,7 +46,7 @@ import core.commands as commands
 from core.context import Context, State
 from core.env import GUI_ENV
 from core.listener import run_listener, wait_for_mic_ready
-from core.recognizer import VoskRecognizer
+from core.recognizer import make_recognizer_factory
 from core.run import get_default_source
 from core.tray import VoiceCommanderTray
 from core.wake import WakeWordDetector
@@ -185,34 +184,23 @@ def main() -> None:
     refresh_monitor_map(GUI_ENV)
     commands.seed_monitor_defaults()
 
-    try:
-        model_path = commands.get_vosk_model_path()
-    except ValueError as e:
-        print(f"[voice-commander] ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
-
     wake_words = commands.get_wake_words()
     detector = WakeWordDetector(wake_words)
 
     context = Context()
 
-    print(f"[voice-commander] Loading Vosk model from {model_path}...")
-    if not os.path.isdir(model_path):
-        print(f"[voice-commander] ERROR: Vosk model not found at {model_path}", file=sys.stderr)
-        sys.exit(1)
-
+    # The listener never touches an engine API (see core/recognizer.py).
+    # make_recognizer_factory() does the heavy one-time setup for the
+    # configured backend (Vosk model load, or whisper-server unit spin-up)
+    # and returns the cheap per-mic-restart factory.
+    backend = commands.get_recognizer_backend()
+    print(f"[voice-commander] Recognizer backend: {backend}")
     try:
-        model = vosk.Model(model_path)
+        recognizer_factory = make_recognizer_factory()
     except Exception as e:
-        print(f"[voice-commander] ERROR: Failed to load Vosk model from {model_path}: {e}", file=sys.stderr)
+        print(f"[voice-commander] ERROR: Failed to set up {backend} backend: {e}", file=sys.stderr)
         sys.exit(1)
-    print("[voice-commander] Model loaded.")
-
-    # The listener never touches an engine API (see core/recognizer.py);
-    # it gets a factory so mic restarts create a fresh recognizer while
-    # the model above stays loaded in this closure.
-    def recognizer_factory():
-        return VoskRecognizer(model)
+    print("[voice-commander] Recognizer ready.")
 
     state_queue   = queue.Queue()
     command_queue = queue.Queue()

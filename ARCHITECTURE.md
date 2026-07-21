@@ -422,6 +422,31 @@ companion — keep them in sync.
   process; GUI tests crash after it — use the shared
   `QApplication.instance() or QApplication([])` pattern).
 
+### whisper-server is a BOUND user unit; it can never outlive the app
+- **What:** The Whisper backend's transcription server runs as its own
+  systemd user unit (`vc-whisper-server.service`, template
+  `vc-whisper-server.service.in`), NOT as a child process. Lifecycle is
+  chained to the app's unit: `BindsTo=` + `After=` make systemd stop it
+  whenever the app unit stops, crashes, or restarts; it has no
+  `[Install]` section so it cannot be enabled standalone; starting it
+  manually pulls the app unit up with it. The app starts it on demand:
+  `core/whisper_server.py:ensure_server()` writes the env file
+  (`~/.config/voice-commander/whisper-server.env`: model path + port,
+  from config keys `whisper_model`/`whisper_server_port`) and runs
+  `systemctl --user start` — or `restart` when the env file CHANGED, so
+  a GUI model switch takes effect. systemctl output is captured;
+  failure returns False (dev checkouts have no unit; the listener
+  surfaces unreachable-server errors per segment).
+- **Why:** Tyler's requirement: no orphaned processes "floating in the
+  aether" when VC stops — BindsTo is systemd-enforced, not cleanup
+  code. Separate unit gets systemd supervision (Restart=on-failure),
+  separate journalctl logs, and a warm model across app restarts,
+  without VC hand-rolling child-process babysitting.
+- **Don't:** Spawn whisper-server as a subprocess of VC. Add an
+  `[Install]`/`WantedBy` to the unit. Put the model path inline in
+  ExecStart (env file is the config channel). Swallow systemctl
+  stderr.
+
 ### Install architecture: code lives in `~/.local/share/voice-commander/app/`
 - **What:** `install.sh` copies repo source to the XDG data dir; the
   systemd service runs from there. User can clone anywhere, install,

@@ -1,0 +1,32 @@
+# Whisper transcription server for Voice Commander -- systemd user unit
+#
+# This file is a TEMPLATE, like voice-commander.service.in: install.sh
+# substitutes @APP_NAME@ and writes the result to
+# ~/.config/systemd/user/vc-whisper-server.service.
+#
+# Lifecycle: this unit is BOUND to the main app and can never outlive it.
+#   - BindsTo=  -> systemd stops this unit whenever the app's unit stops,
+#     crashes, or restarts. No orphaned server holding VRAM.
+#   - After=    -> required alongside BindsTo for the "bound unit must be
+#     active" semantics to hold.
+#   - No [Install] section -> it cannot be enabled to start on login by
+#     itself. The app starts it on demand (core/whisper_server.py) when
+#     recognizer_backend=whisper; starting it manually pulls the app up
+#     with it rather than running alone.
+#
+# Config reaches the static unit through an environment file written by
+# core/whisper_server.py (model path + port). A model change in the GUI
+# rewrites the env file and restarts this unit -- the app's own unit is
+# untouched.
+
+[Unit]
+Description=Whisper transcription server for Voice Commander
+BindsTo=@APP_NAME@.service
+After=@APP_NAME@.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/@APP_NAME@/whisper-server.env
+ExecStart=/usr/bin/whisper-server -m ${WHISPER_MODEL_PATH} --host 127.0.0.1 --port ${WHISPER_PORT}
+Restart=on-failure
+RestartSec=2

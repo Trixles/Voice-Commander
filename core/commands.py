@@ -566,6 +566,40 @@ def get_overrides() -> list[dict]:
 _DEFAULT_VOSK_MODEL_DIR  = os.path.expanduser("~/.local/share/voice-commander/vosk-model/")
 _DEFAULT_VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
 
+# Whisper-backend model files (ggml weights for whisper-server, Silero VAD
+# onnx) live under a shared models/ dir, unlike the legacy vosk-model/ dir.
+_MODELS_DIR = os.path.expanduser("~/.local/share/voice-commander/models/")
+
+
+def get_recognizer_backend() -> str:
+    """'vosk' or 'whisper'. Hand-edited typos fall back to vosk loudly
+    rather than killing the service over a config string."""
+    backend = _config.get("recognizer_backend", "vosk")
+    if backend not in ("vosk", "whisper"):
+        print(f"[commands] Unknown recognizer_backend {backend!r}, using vosk.")
+        return "vosk"
+    return backend
+
+
+def get_whisper_server_port() -> int:
+    return int(_config.get("whisper_server_port", 8910))
+
+
+def get_whisper_vad_tail_ms() -> int:
+    """Silence tail that closes a speech segment (see WhisperRecognizer)."""
+    return int(_config.get("whisper_vad_tail_ms", 400))
+
+
+def get_whisper_model_path() -> str:
+    """Absolute path to the ggml weights whisper-server should load.
+    'whisper_model' is a size name ('base.en', 'small.en', ...)."""
+    name = str(_config.get("whisper_model", "base.en")).strip() or "base.en"
+    return os.path.join(_MODELS_DIR, "whisper", f"ggml-{name}.bin")
+
+
+def get_vad_model_path() -> str:
+    return os.path.join(_MODELS_DIR, "silero_vad.onnx")
+
 
 def get_vosk_model_path() -> str:
     """
@@ -1384,6 +1418,10 @@ if __name__ == "__main__":
             "match_threshold": DEFAULT_THRESHOLD,
             "notifications": True,
             "vosk_model": _DEFAULT_VOSK_MODEL_NAME,
+            "recognizer_backend": "vosk",
+            "whisper_model": "base.en",
+            "whisper_server_port": 8910,
+            "whisper_vad_tail_ms": 400,
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],

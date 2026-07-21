@@ -149,3 +149,49 @@ class WhisperRecognizer:
         if not text:
             return None
         return RecognizerEvent(kind="final", text=text)
+
+
+def make_recognizer_factory():
+    """Build the recognizer factory for the configured backend.
+
+    Called once at app startup (voice_commander.py). Heavy one-time setup
+    happens HERE -- Vosk model load, whisper-server unit spin-up -- while
+    the returned zero-arg factory only does cheap per-listener-run work,
+    so mic restarts stay fast. Engine modules are imported lazily per
+    branch: a vosk install never imports onnxruntime and vice versa.
+    """
+    import core.commands as commands
+
+    backend = commands.get_recognizer_backend()
+
+    if backend == "whisper":
+        import core.vad as vad
+        import core.whisper_client as whisper_client
+        import core.whisper_server as whisper_server
+
+        # Bring the transcription server up now (unit restart if config
+        # changed). Failure is non-fatal: the listener surfaces unreachable-
+        # server errors per segment, and systemd keeps retrying the unit.
+        whisper_server.ensure_server()
+
+        url = f"http://127.0.0.1:{commands.get_whisper_server_port()}/inference"
+        vad_model = commands.get_vad_model_path()
+        tail_ms = commands.get_whisper_vad_tail_ms()
+
+        def factory():
+            return WhisperRecognizer(
+                vad=vad.SileroVAD(vad_model),
+                transcribe=lambda pcm: whisper_client.transcribe_pcm(pcm, url),
+                tail_ms=tail_ms,
+            )
+
+        return factory
+
+    import vosk
+
+    model = vosk.Model(commands.get_vosk_model_path())
+
+    def factory():
+        return VoskRecognizer(model)
+
+    return factory

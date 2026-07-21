@@ -21,8 +21,9 @@ Save behavior:
   - Immediately calls commands.load_config() so changes are live without restart
   - Wake word and Vosk model changes still require a service restart
     (detector / model loaded at startup)
-  - Dirty-tracked: starts disabled, enables on the first user-driven edit
-    to any field, disables again after a successful save
+  - Dirty-tracked: starts disabled, enables while the form differs from the
+    last-saved state, disables again after a successful save OR when every
+    edit is undone (the form is compared against a snapshot, not latched)
 
 Command name/slug rules:
   - User actions (launch_app, open_url, open_file, run_command): name is
@@ -232,6 +233,13 @@ class SettingsDialog(QDialog):
         # Model picker dirties via _browse_vosk_model -> _check_restart_needed,
         # which we extend below to also call _mark_dirty.
 
+        # Baseline for revert detection: _mark_dirty compares the live form
+        # against this snapshot, so undoing every edit disables Save again.
+        # Captured here, after all tabs are built and seeded, for the same
+        # reason the signal wiring is: the form now holds exactly the saved
+        # state.
+        self._clean_state = self._form_state()
+
     def _make_scroll_tab(self) -> tuple[QWidget, QVBoxLayout]:
         tab = QWidget()
         tab.setObjectName("tabPage")
@@ -341,15 +349,38 @@ class SettingsDialog(QDialog):
     def _apply_stylesheet(self) -> None:
         self.setStyleSheet(build_stylesheet(self._translucent))
 
+    def _form_state(self) -> tuple:
+        """Snapshot of every dirty-tracked field, for equality comparison
+        against _clean_state. Built from the same pure collect() readers the
+        save path uses, so "state differs" and "a save would change the file"
+        agree. Wake words are normalized exactly as _save writes them --
+        cosmetic whitespace/case edits don't count as changes."""
+        return (
+            [w.strip().lower() for w in self._wake_edit.text().split(",")
+             if w.strip()],
+            self._commands_container.collect(),
+            self._overrides_container.collect(),
+            self._overrides_container.collect_disabled_defaults(),
+            [row.collect() for row in self._monitor_rows],
+            self._notifications_toggle.isChecked(),
+            self._strictness_slider.value(),
+            self._selected_model_path,
+            # Always readable: when systemctl is unavailable the toggle exists
+            # but is disabled, so its value is constant and can't flip state.
+            self._autostart_toggle.isChecked(),
+        )
+
     def _mark_dirty(self, *_args) -> None:
-        """Enable the Save button. Called by every dirty source -- wake edit,
-        commands container, monitor rows, mic phrases, model picker.
-        Idempotent: safe to call repeatedly."""
-        if not self._save_btn.isEnabled():
-            self._save_btn.setEnabled(True)
+        """Sync the Save button to whether the form actually differs from the
+        last-saved state. Called by every dirty source -- wake edit, commands
+        container, monitor rows, mic phrases, model picker. Comparing instead
+        of blindly enabling means undoing an edit disables Save again."""
+        self._save_btn.setEnabled(self._form_state() != self._clean_state)
 
     def _mark_clean(self) -> None:
-        """Disable the Save button. Called after a successful save."""
+        """Disable the Save button and re-baseline revert detection. Called
+        after a successful save."""
+        self._clean_state = self._form_state()
         self._save_btn.setEnabled(False)
 
     def _check_restart_needed(self, *_args) -> None:

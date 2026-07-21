@@ -61,6 +61,33 @@ companion — keep them in sync.
   boundaries on trailing slots.
 - **Don't:** Revert to unconditional `.+?`.
 
+### Recognizer seam: the listener consumes events, never engine APIs
+- **What:** `core/recognizer.py` is the only place that touches a speech
+  engine. Contract: a recognizer's `feed(bytes)` takes 16kHz s16 mono PCM
+  and returns a `RecognizerEvent(kind, text)` — `"partial"` (streaming
+  mid-utterance text) or `"final"` (end-of-utterance transcription) — or
+  `None` when the backend has nothing to report for that chunk (batch
+  backends buffering; Vosk never returns None). Event text is ALWAYS
+  stripped and lowercase — per-engine cleanup (Vosk JSON envelopes,
+  Whisper punctuation/caps) lives behind the seam, so the listener,
+  wake check, overrides, and matcher never see engine-specific output.
+  `run_listener` takes a `recognizer_factory` (zero-arg callable) rather
+  than a model: the factory is called once per listener run, so mic
+  restarts get a fresh recognizer while heavy engine state (the Vosk
+  model) stays loaded in the entry point's closure. `SAMPLE_RATE` (16000)
+  is owned by `core/recognizer.py`; `pw-record`'s invocation reads it
+  from there. Engine imports are deferred inside the concrete classes
+  (`import vosk` inside `VoskRecognizer.__init__`) so an install using
+  one backend never needs the other's package. The state machine is
+  tested engine-free via this seam (`tests/test_listener.py`).
+- **Why:** The Vosk→Whisper migration (this fork's mission). Coupling
+  was exactly three call sites; the seam makes the swap a new class,
+  not another listener rewrite.
+- **Don't:** Import an engine in `core/listener.py`. Put text cleanup
+  (strip/lower/punctuation) in the listener — it belongs behind the
+  seam. Hardcode 16000 anywhere but `SAMPLE_RATE`. Pass a live
+  recognizer into `run_listener` (restarts need the factory).
+
 ### Vosk normalization split: hallucination filter vs user overrides
 - **What:** Two separate, sequential rewrites of Vosk transcripts
   before matching, in this order:

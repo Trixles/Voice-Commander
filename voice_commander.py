@@ -47,6 +47,7 @@ import core.commands as commands
 from core.context import Context, State
 from core.env import GUI_ENV
 from core.listener import run_listener, wait_for_mic_ready
+from core.recognizer import VoskRecognizer
 from core.run import get_default_source
 from core.tray import VoiceCommanderTray
 from core.wake import WakeWordDetector
@@ -114,7 +115,7 @@ def _acquire_single_instance() -> QLocalServer | None:
 # -- Main --------------------------------------------------------------------
 
 def _listener_thread(
-    model: vosk.Model,
+    recognizer_factory,
     detector,
     context: Context,
     gui_env: dict,
@@ -144,7 +145,7 @@ def _listener_thread(
         state_queue.put(State.SLEEPING)
         run_listener(
             source=source,
-            model=model,
+            recognizer_factory=recognizer_factory,
             detector=detector,
             context=context,
             gui_env=gui_env,
@@ -207,13 +208,19 @@ def main() -> None:
         sys.exit(1)
     print("[voice-commander] Model loaded.")
 
+    # The listener never touches an engine API (see core/recognizer.py);
+    # it gets a factory so mic restarts create a fresh recognizer while
+    # the model above stays loaded in this closure.
+    def recognizer_factory():
+        return VoskRecognizer(model)
+
     state_queue   = queue.Queue()
     command_queue = queue.Queue()
 
     # Listener runs in a background thread; Qt owns the main thread
     t = threading.Thread(
         target=_listener_thread,
-        args=(model, detector, context, GUI_ENV, state_queue, command_queue),
+        args=(recognizer_factory, detector, context, GUI_ENV, state_queue, command_queue),
         daemon=True,
     )
     t.start()

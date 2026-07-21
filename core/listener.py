@@ -3,9 +3,12 @@ core/listener.py
 ================
 Audio capture loop and state machine.
 
-The Vosk model is loaded ONCE by the entry point (voice_commander.py) and
-passed in here. Mic restarts recreate only the pw-record subprocess and the
-KaldiRecognizer -- the model itself stays in memory.
+Speech recognition happens behind the seam in core/recognizer.py: the
+entry point (voice_commander.py) passes a recognizer_factory, and this
+loop consumes RecognizerEvents -- it never touches an engine API. Heavy
+engine state (e.g. the Vosk model) is owned by the entry point and
+captured in the factory; mic restarts recreate only the pw-record
+subprocess and a fresh recognizer from the factory.
 
 State machine:
   SLEEPING   -> LISTENING    wake word heard (acknowledged immediately off a
@@ -23,18 +26,16 @@ the confirmation was triggered (SLEEPING, LISTENING, or OPEN_MIC).
 Open mic and confirm/cancel are built-in and not user-configurable.
 """
 
-import json
 import queue
 import subprocess
 import threading
 import time
 from datetime import datetime
 
-import vosk
-
 from core.context import Context, State
 from core.log_buffer import LOG_BUFFER
 from core.notify import notify as _notify
+from core.recognizer import SAMPLE_RATE
 from core.run import get_default_source
 from core.wake import WakeWordDetector
 import core.commands as commands
@@ -84,7 +85,7 @@ def _open_pw_record(source: str) -> subprocess.Popen:
     # process whose stdout we read from a thread and which we .kill() on
     # mic toggle. Neither run_bg nor run_capture models this lifecycle.
     return subprocess.Popen(
-        ["pw-record", f"--target={source}", "--format=s16", "--rate=16000", "--channels=1", "-"],
+        ["pw-record", f"--target={source}", "--format=s16", f"--rate={SAMPLE_RATE}", "--channels=1", "-"],
         stdout=subprocess.PIPE,
     )
 
@@ -190,7 +191,7 @@ def _is_cancel(text: str) -> bool:
 
 def run_listener(
     source: str,
-    model: vosk.Model,
+    recognizer_factory,
     detector: WakeWordDetector,
     context: Context,
     gui_env: dict,
@@ -201,8 +202,12 @@ def run_listener(
     Run the main audio capture + recognition loop on `source`.
     Returns when the mic changes, goes silent, or an unrecoverable error occurs.
     The caller (voice_commander.py) handles restart.
-    `model` is reused across restarts -- do NOT reload it here.
 
+    recognizer_factory -- zero-arg callable returning a fresh seam-conformant
+                          recognizer (see core/recognizer.py). Called once per
+                          run_listener invocation, so a mic restart gets a
+                          fresh recognizer while heavy engine state (e.g. the
+                          Vosk model) stays alive inside the factory's closure.
     state_queue   -- if provided, push State values whenever context.state changes
     command_queue -- if provided, check each loop for 'toggle_open_mic' / 'quit'
     """
@@ -224,7 +229,7 @@ def run_listener(
         LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  {title}")
         print(f"[listener] -> CONFIRMING ({context.pending_confirm.get('name')})")
 
-    rec  = vosk.KaldiRecognizer(model, 16000)
+    rec  = recognizer_factory()
     proc = _open_pw_record(source)
     audio_queue = _start_reader(proc)
 
@@ -306,10 +311,17 @@ def run_listener(
             except queue.Empty:
                 pass
 
-        if not rec.AcceptWaveform(data):
-            # Mid-utterance: Vosk has no final text yet, but partials stream
-            # live. Two jobs here, both so feedback/timing track *speech*
-            # rather than Vosk's end-of-utterance endpoint (~1.5s of silence):
+        event = rec.feed(data)
+        if event is None:
+            # Backend has nothing to report for this chunk (e.g. a batch
+            # engine still buffering). Vosk never does this; Whisper will.
+            continue
+
+        if event.kind == "partial":
+            # Mid-utterance: the engine has no final text yet, but partials
+            # stream live. Two jobs here, both so feedback/timing track
+            # *speech* rather than the end-of-utterance endpoint (~1.5s of
+            # silence for Vosk):
             #
             #  - SLEEPING: the moment a partial contains the wake word,
             #    acknowledge immediately -- fire "Listening...", light the
@@ -327,7 +339,7 @@ def run_listener(
             #    talking), not wall-clock since the wake word.
             #
             # OPEN_MIC has no window; CONFIRMING is unaffected.
-            partial = json.loads(rec.PartialResult()).get("partial", "").strip()
+            partial = event.text
             if context.state == State.SLEEPING:
                 if partial and detector.check(partial):
                     command_window = commands.get_command_window()
@@ -342,8 +354,9 @@ def run_listener(
                     command_window_start = now
             continue
 
-        result = json.loads(rec.Result())
-        text   = result.get("text", "").strip().lower()
+        # Final: end-of-utterance transcription. The seam guarantees
+        # stripped lowercase text, so no per-engine cleanup here.
+        text = event.text
 
         if not text:
             continue

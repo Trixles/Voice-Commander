@@ -65,9 +65,21 @@ companion — keep them in sync.
 - **What:** `core/recognizer.py` is the only place that touches a speech
   engine. Contract: a recognizer's `feed(bytes)` takes 16kHz s16 mono PCM
   and returns a `RecognizerEvent(kind, text)` — `"partial"` (streaming
-  mid-utterance text) or `"final"` (end-of-utterance transcription) — or
-  `None` when the backend has nothing to report for that chunk (batch
-  backends buffering; Vosk never returns None). Event text is ALWAYS
+  mid-utterance text), `"final"` (end-of-utterance transcription), or
+  `"speech"` (voice activity with no text, from batch backends without
+  partials; refreshes the LISTENING inactivity window, ignored
+  elsewhere) — or `None` when the backend has nothing to report for
+  that chunk (batch backends buffering; Vosk never returns None).
+  `WhisperRecognizer` does VAD-driven segmentation with injected
+  collaborators (`vad(chunk)->bool`, `transcribe(pcm)->str`): buffers
+  speech plus one pre-roll and one tail chunk (word edges never align
+  with chunks), closes a segment after `tail_ms` (default 400ms) of
+  silence, and emits ONE final per segment — per-segment dispatch is
+  the paused-chain fix. Whisper prose is normalized behind the seam
+  (`_clean_whisper_text`): noise tags `[...]`/`(...)` dropped,
+  punctuation stripped (apostrophes kept), standalone digits 0-9 →
+  words ("monitor 3" → "monitor three"); a segment cleaning to empty
+  emits nothing. Event text is ALWAYS
   stripped and lowercase — per-engine cleanup (Vosk JSON envelopes,
   Whisper punctuation/caps) lives behind the seam, so the listener,
   wake check, overrides, and matcher never see engine-specific output.

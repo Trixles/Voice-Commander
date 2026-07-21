@@ -317,6 +317,15 @@ def run_listener(
             # engine still buffering). Vosk never does this; Whisper will.
             continue
 
+        if event.kind == "speech":
+            # Voice activity from a backend with no streaming partials
+            # (Whisper). No text to wake on or match yet -- the only job is
+            # keeping the inactivity window alive while the user talks,
+            # same as a text-bearing partial does below.
+            if context.state == State.LISTENING:
+                command_window_start = now
+            continue
+
         if event.kind == "partial":
             # Mid-utterance: the engine has no final text yet, but partials
             # stream live. Two jobs here, both so feedback/timing track

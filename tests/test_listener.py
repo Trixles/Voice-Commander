@@ -199,6 +199,47 @@ def test_full_wake_then_command_flow(monkeypatch):
     assert r["context"].state == State.SLEEPING
 
 
+def test_speech_event_refreshes_command_window(monkeypatch):
+    # Whisper-backed recognizers have no partials; they emit "speech"
+    # events while the user talks. Those must refresh the inactivity
+    # window exactly like text partials do, or a long utterance falls
+    # asleep mid-sentence. Proven with a fake clock: window is 8s, the
+    # final lands 10s after wake -- only survivable if the speech event
+    # at +5s refreshed the window.
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(listener.time, "time", lambda: clock["t"])
+
+    events = [
+        RecognizerEvent("partial", "computer"),  # t=1000: wake, window starts
+        RecognizerEvent("speech", ""),           # t=1005: must refresh window
+        RecognizerEvent("final", "open firefox"),  # t=1010: 10s > 8s window
+    ]
+    orig_feed = ScriptedRecognizer.feed
+
+    def feed_and_advance(self, data):
+        ev = orig_feed(self, data)
+        clock["t"] += 5.0
+        return ev
+
+    monkeypatch.setattr(ScriptedRecognizer, "feed", feed_and_advance)
+    r = run_machine(events, monkeypatch)
+    assert r["matched"] == ["open firefox"]
+
+
+def test_speech_event_while_sleeping_is_ignored(monkeypatch):
+    # No text, so nothing to wake on; must not crash or change state.
+    r = run_machine([RecognizerEvent("speech", "")], monkeypatch)
+    assert r["context"].state == State.SLEEPING
+    assert r["matched"] == []
+
+
+def test_none_event_is_skipped(monkeypatch):
+    # Batch backends buffering mid-segment return None; the loop just
+    # moves on to the next chunk.
+    r = run_machine([None, RecognizerEvent("partial", "computer")], monkeypatch)
+    assert State.LISTENING in r["states"]
+
+
 def test_listener_module_does_not_import_vosk():
     # The whole point of the seam: engine imports live behind it, so a
     # Whisper-only install never needs the vosk package.

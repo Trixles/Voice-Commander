@@ -8,7 +8,9 @@ Contract every backend must honor:
   - feed(bytes) accepts 16kHz s16 mono PCM and returns a RecognizerEvent
     (or None when the backend has nothing to report for this chunk).
   - "partial" events stream mid-utterance text as words form; "final"
-    events carry the end-of-utterance transcription.
+    events carry the end-of-utterance transcription; "speech" events
+    (empty text) report voice activity from backends that have no
+    streaming partials, so the listener's inactivity window can refresh.
   - Event text is always stripped and lowercase. The normalization lives
     HERE, not in the listener, so backends with different output styles
     (Vosk: bare lowercase; Whisper: punctuated prose) present identical
@@ -20,6 +22,7 @@ one backend never needs the other's package.
 """
 
 import json
+import re
 from dataclasses import dataclass
 
 # One home for the capture format. pw-record's invocation and every
@@ -30,8 +33,33 @@ SAMPLE_RATE = 16000
 
 @dataclass(frozen=True)
 class RecognizerEvent:
-    kind: str  # "partial" | "final"
+    kind: str  # "partial" | "final" | "speech"
     text: str
+
+
+# -- Whisper output cleanup ----------------------------------------------------
+# Whisper emits punctuated, capitalized prose with digits ("Open Dolphin on
+# monitor 3.") and labels non-speech in brackets ("[typing]", "(music)").
+# The seam contract wants what Vosk produced: bare lowercase words.
+
+_NOISE_TAG_RE = re.compile(r"\[[^\]]*\]|\([^)]*\)")
+_NON_WORD_RE = re.compile(r"[^a-z0-9']+")  # keep apostrophes: "what's playing"
+_DIGIT_WORDS = {
+    "0": "zero", "1": "one", "2": "two", "3": "three", "4": "four",
+    "5": "five", "6": "six", "7": "seven", "8": "eight", "9": "nine",
+}
+
+
+def _clean_whisper_text(raw: str) -> str:
+    """Normalize Whisper prose to the seam contract. May return ""
+    (e.g. a segment that was nothing but a noise tag) -- callers treat
+    empty as nothing-to-report."""
+    text = _NOISE_TAG_RE.sub(" ", raw).lower()
+    text = _NON_WORD_RE.sub(" ", text)
+    # Whisper writes "monitor 3" where Vosk wrote "monitor three"; phrases
+    # and slot aliases are word-based, so standalone small digits become
+    # words. Multi-digit tokens pass through untouched.
+    return " ".join(_DIGIT_WORDS.get(tok, tok) for tok in text.split())
 
 
 class VoskRecognizer:
@@ -56,3 +84,68 @@ class VoskRecognizer:
             text = json.loads(self._rec.PartialResult()).get("partial", "")
             kind = "partial"
         return RecognizerEvent(kind=kind, text=text.strip().lower())
+
+
+class WhisperRecognizer:
+    """VAD-segmenting wrapper for batch engines (whisper-server).
+
+    Whisper has no streaming partials: whole audio in -> text out. So this
+    class segments speech itself: buffer chunks while the injected VAD
+    reports voice, and when silence has lasted `tail_ms`, hand the whole
+    segment to `transcribe` and emit ONE "final". Mid-speech chunks emit
+    "speech" events so the listener's inactivity window tracks the voice.
+
+    Each VAD-split segment dispatches independently -- that is the fix for
+    paused command chains (a pause > tail_ms simply closes one segment and
+    the next one matches on its own).
+
+    Injected collaborators (kept injectable for tests and backend choice):
+      vad(chunk: bytes) -> bool        speech present in this 125ms chunk?
+      transcribe(pcm: bytes) -> str    raw engine text for a whole segment
+
+    Buffering detail: one chunk of pre-roll before speech onset and the
+    first tail chunk after it are included in the segment, because word
+    boundaries never align with chunk edges.
+    """
+
+    def __init__(self, vad, transcribe, tail_ms: int = 400):
+        self._vad = vad
+        self._transcribe = transcribe
+        self._tail_ms = tail_ms
+        self._buffer: list = []
+        self._preroll: bytes = b""
+        self._in_speech = False
+        self._silence_ms = 0.0
+
+    def feed(self, data: bytes):
+        chunk_ms = len(data) / 2 / SAMPLE_RATE * 1000  # s16 = 2 bytes/sample
+
+        if self._vad(data):
+            if not self._in_speech:
+                self._in_speech = True
+                self._buffer = [self._preroll] if self._preroll else []
+            self._buffer.append(data)
+            self._silence_ms = 0.0
+            return RecognizerEvent(kind="speech", text="")
+
+        if not self._in_speech:
+            self._preroll = data
+            return None
+
+        # Silence inside an open segment: wait out the tail.
+        self._silence_ms += chunk_ms
+        if self._silence_ms == chunk_ms:
+            self._buffer.append(data)  # first tail chunk: keeps the word's end
+        if self._silence_ms < self._tail_ms:
+            return None
+
+        # Tail complete: close and transcribe the segment.
+        pcm = b"".join(self._buffer)
+        self._buffer = []
+        self._in_speech = False
+        self._silence_ms = 0.0
+        self._preroll = data
+        text = _clean_whisper_text(self._transcribe(pcm))
+        if not text:
+            return None
+        return RecognizerEvent(kind="final", text=text)

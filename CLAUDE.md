@@ -86,10 +86,14 @@ Don't assume — just ask: "Want me to update HANDOFF first?"
 
 ## Project-specific rules
 
-- **Edit the repo only. Tyler runs `install.sh` to deploy.** Never
-  write to `~/.local/share/voice-commander/app/` or
-  `~/.local/share/kwin/scripts/vc-window-placer/`. Reading is fine
-  but flag when reading deployed code in case of repo divergence.
+- **Edit the repo; Claude runs `install.sh` to deploy — but ONLY
+  after an explicit go-ahead from Tyler in that conversation.** Never
+  deploy unprompted, never assume a past yes carries forward. Never
+  write directly to `~/.local/share/voice-commander/app/` or
+  `~/.local/share/kwin/scripts/vc-window-placer/` — all deploys go
+  through `install.sh`. After deploying, byte-verify deployed files
+  against the repo. Reading deployed code is fine but flag it in
+  case of repo divergence.
 - **Tagged releases get a source tarball backup at
   `~/Development/Backups/Voice-Commander/`.** Build with
   `git archive --format=tar.gz --prefix=voice-commander-<version>/

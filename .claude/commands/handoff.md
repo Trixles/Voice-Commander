@@ -17,21 +17,23 @@ repo and this session's work. Follow the protocol documented in the
    anything that's no longer accurate. Growth fills freed space,
    never stacks. The hard ceiling is 200 lines; soft target 150.
 
-3. **Verify the invariant index in `HANDOFF.md` matches the `###`
-   headers in `ARCHITECTURE.md`.** If a new invariant was added this
-   session, sync it into the index. If you can't tell, grep
-   `^### ` in `ARCHITECTURE.md` and compare.
+3. **Do NOT touch or re-add an invariant index in `HANDOFF.md`.**
+   The mirror was dropped end of s19 — `ARCHITECTURE.md` is the single
+   source of truth and its `^### ` headers ARE the index. If a new
+   invariant emerged this session, it belongs in `ARCHITECTURE.md`
+   only (and should already be there per CLAUDE.md's
+   update-immediately rule — if it isn't, add it there now, not here).
 
 4. **Update the session number and date in the top heading.** It
    should read `# HANDOFF — End of session N (YYYY-MM-DD)`. Bump N
    by one from whatever's there now.
 
-5. **Show me the diff before saving.** I want to see what's
-   changing.
+5. **Write the file directly — no diff, no approval step.** Standing
+   autonomy rule: HANDOFF.md updates never wait on review. Summarize
+   what changed in a few bullets after saving.
 
-After I approve the diff, save the file. Do not propose any commits
-afterward unless I ask — `HANDOFF.md` is gitignored and just needs
-to exist on disk.
+Do not propose any commits afterward unless I ask — `HANDOFF.md` is
+gitignored and just needs to exist on disk.
 
 If you're unsure whether something belongs in HANDOFF vs.
 ARCHITECTURE vs. nowhere, ask. Don't guess.

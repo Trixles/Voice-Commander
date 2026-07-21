@@ -7,8 +7,11 @@ Volume is controlled via pactl (PipeWire exposes a PulseAudio-compatible
 interface). Media play/pause uses playerctl, which talks to MPRIS-compatible
 players (Plex, YouTube in browser, etc.) over D-Bus.
 
-Power commands (shutdown, restart, logout) use systemctl / loginctl,
-which work correctly from a user session and don't need sudo.
+Power commands (shutdown, restart, logout) go through KDE's session
+manager (org.kde.Shutdown on the session bus) rather than systemctl.
+This is the same path the physical power button takes: the theme's
+logout sound plays, and apps get a clean session-managed exit.
+`systemctl poweroff` would skip both.
 """
 
 from core.run import run_bg, run_capture
@@ -108,22 +111,33 @@ def media_resume(gui_env: dict, context=None) -> None:
 
 # -- Power --------------------------------------------------------------------
 
-def shutdown(gui_env: dict, context=None) -> None:
-    run_bg(["systemctl", "poweroff"], env=gui_env)
-
-
-def restart(gui_env: dict, context=None) -> None:
-    run_bg(["systemctl", "reboot"], env=gui_env)
-
-
-def logout(gui_env: dict, context=None) -> None:
-    """Log out of the current KDE Plasma 6 session via dbus-send."""
+def _kde_session_exit(method: str, gui_env: dict) -> None:
+    """
+    Invoke one of org.kde.Shutdown's session-exit methods (logout,
+    logoutAndReboot, logoutAndShutdown). All power commands funnel
+    through here so they behave identically to the power button.
+    """
     run_bg(
         ["dbus-send", "--session", "--print-reply",
          "--dest=org.kde.Shutdown", "/Shutdown",
-         "org.kde.Shutdown.logout"],
+         f"org.kde.Shutdown.{method}"],
         env=gui_env,
     )
+
+
+def shutdown(gui_env: dict, context=None) -> None:
+    """Shut down via KDE session manager (plays logout sound, clean exit)."""
+    _kde_session_exit("logoutAndShutdown", gui_env)
+
+
+def restart(gui_env: dict, context=None) -> None:
+    """Reboot via KDE session manager (plays logout sound, clean exit)."""
+    _kde_session_exit("logoutAndReboot", gui_env)
+
+
+def logout(gui_env: dict, context=None) -> None:
+    """Log out of the current KDE Plasma 6 session."""
+    _kde_session_exit("logout", gui_env)
 
 
 # -- Shell command ------------------------------------------------------------

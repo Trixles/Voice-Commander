@@ -860,6 +860,24 @@ companion — keep them in sync.
   append params; match the video ID). Fail CLOSED on playerctl errors (a
   broken check must never block the command). Treat `Paused` as playing.
 
+### Power commands go through org.kde.Shutdown, not systemctl
+
+- **What:** shutdown / restart / logout (`core/actions/system.py`) all
+  funnel through `_kde_session_exit()`, which calls the session bus:
+  `org.kde.Shutdown.logoutAndShutdown` / `.logoutAndReboot` / `.logout`
+  via `dbus-send`. This is the same path KDE's own power button and
+  Application-Launcher entries take.
+- **Why:** `systemctl poweroff|reboot` yanks the system down without a
+  session-managed exit — no theme logout sound, no clean app shutdown.
+  Tyler wants the jingle (and the graceful exit) on every path. Live-
+  verified 2026-07-20: KDE session end + sound, then the normal systemd
+  teardown; both request paths converge at logind, so nothing below the
+  session layer changes.
+- **Don't:** "Simplify" back to `systemctl poweroff`/`reboot` (mutes the
+  jingle, skips session management). Add a delay/sleep before exit.
+  Assume the methods exist on non-KDE desktops — this is a
+  Plasma-targeted app and the D-Bus dest is KDE-specific on purpose.
+
 ### Verification gauntlet
 
 - **What:** Before a deploy or commit, run the health check as one line:

@@ -40,6 +40,9 @@ HANDOFF.md
 # outside the repo if you want a backup.
 commands.json
 
+# -- Whisper benchmark scratch (models + recorded samples, hundreds of MB) ----
+benchmark/
+
 # -- Logs / temp --------------------------------------------------------------
 *.log
 *.tmp

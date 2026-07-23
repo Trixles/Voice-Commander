@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 #
-# uninstall.sh -- Voice Commander uninstaller
+# uninstall.sh -- Voice Commander (Whisper fork) uninstaller
 #
-# Removes everything install.sh put in place:
-#   - the systemd user service (stopped, disabled, file deleted)
+# Removes everything the FORK's install.sh put in place (the parent
+# voice-commander install is untouched):
+#   - both systemd user units (app + whisper-server; stopped, disabled, deleted)
 #   - the launcher script in ~/.local/bin/
-#   - the app, venv, icons, KWin script, Vosk model
+#   - the app, venv, icons, KWin script, Vosk + Whisper/VAD models
 #
 # By default, the user's commands.json is PRESERVED. Pass --purge to also
 # delete the config directory.
 
 set -euo pipefail
 
-readonly APP_NAME="voice-commander"
+readonly APP_NAME="voice-commander-whisper"
 
 readonly DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/${APP_NAME}"
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${APP_NAME}"
 readonly BIN_DIR="$HOME/.local/bin"
 readonly SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vc-window-placer"
+readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vcw-window-placer"
 
 c_reset='\033[0m'
 c_green='\033[32m'
@@ -34,11 +35,15 @@ if [[ "${1:-}" == "--purge" ]]; then
     purge=true
 fi
 
-info "Stopping and disabling service..."
+info "Stopping and disabling services..."
+# Stopping the app unit also stops the whisper-server unit (BindsTo), but
+# stop it explicitly anyway -- uninstall should not lean on unit semantics.
+systemctl --user stop "${APP_NAME}-server.service" 2>/dev/null || true
 systemctl --user disable --now "${APP_NAME}.service" 2>/dev/null || true
 rm -f "${SYSTEMD_USER_DIR}/${APP_NAME}.service"
+rm -f "${SYSTEMD_USER_DIR}/${APP_NAME}-server.service"
 systemctl --user daemon-reload
-ok "Service removed."
+ok "Services removed."
 
 info "Removing launcher..."
 rm -f "${BIN_DIR}/${APP_NAME}"

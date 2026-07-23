@@ -25,9 +25,10 @@ import os
 import subprocess
 
 import core.commands as commands
+import core.paths as paths
 
-UNIT = "vc-whisper-server.service"
-ENV_PATH = os.path.expanduser("~/.config/voice-commander/whisper-server.env")
+UNIT = paths.WHISPER_UNIT
+ENV_PATH = os.path.join(paths.CONFIG_DIR, "whisper-server.env")
 
 
 def ensure_server() -> bool:

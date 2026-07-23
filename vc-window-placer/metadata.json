@@ -1,10 +1,10 @@
 {
   "KPlugin": {
-    "Name": "Voice Commander Window Placer",
-    "Description": "Moves newly opened windows to a target screen when requested by Voice Commander.",
+    "Name": "Voice Commander (Whisper) Window Placer",
+    "Description": "Moves newly opened windows to a target screen when requested by Voice Commander (Whisper fork).",
     "Icon": "preferences-system-windows",
     "Authors": [{ "Name": "Voice Commander", "Email": "" }],
-    "Id": "vc-window-placer",
+    "Id": "vcw-window-placer",
     "Version": "1.0",
     "License": "MIT",
     "Website": ""

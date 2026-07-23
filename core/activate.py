@@ -27,13 +27,15 @@ headless-testable (pattern: tests importorskip PySide6).
 
 import os
 
+from core.paths import APP_NAME, SERVICE_NAME
 from core.run import run_capture
 
 # Per-user socket name shared with the lock in voice_commander.py. The
 # systemd --user service and any terminal launch share a UID, so the name
 # collides between them BY DESIGN -- the collision is the single-instance
-# guard.
-SINGLE_INSTANCE_NAME = f"voice-commander-{os.getuid()}"
+# guard. Derived from APP_NAME so the fork's lock never blocks (or is
+# blocked by) the parent install's.
+SINGLE_INSTANCE_NAME = f"{APP_NAME}-{os.getuid()}"
 
 _OPEN_SETTINGS = b"open-settings"
 
@@ -65,9 +67,9 @@ def activate(name: str = SINGLE_INSTANCE_NAME) -> int:
     the service. Returns a process exit code."""
     if send_activation(name):
         return 0
-    result = run_capture(["systemctl", "--user", "start", "voice-commander.service"])
+    result = run_capture(["systemctl", "--user", "start", SERVICE_NAME])
     if result.returncode != 0:
-        print(f"[voice-commander] service start failed: {result.stderr.strip()}")
+        print(f"[{APP_NAME}] service start failed: {result.stderr.strip()}")
     return result.returncode
 
 

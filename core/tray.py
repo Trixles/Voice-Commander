@@ -33,7 +33,7 @@ from core.actions import system
 import hardware.respeaker as respeaker
 
 
-ICON_DIR = os.path.expanduser("~/.local/share/voice-commander/icons")
+from core.paths import ICON_DIR, SERVICE_NAME
 
 ICON_MAP = {
     State.SLEEPING:   "vc-sleeping.svg",
@@ -189,7 +189,7 @@ class VoiceCommanderTray:
         # command itself fails. Terminal launches just quit directly.
         if os.environ.get("INVOCATION_ID"):
             from core.run import run_bg
-            run_bg(["systemctl", "--user", "stop", "voice-commander.service"])
+            run_bg(["systemctl", "--user", "stop", SERVICE_NAME])
             QTimer.singleShot(3000, QApplication.quit)
         else:
             QApplication.quit()

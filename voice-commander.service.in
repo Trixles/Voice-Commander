@@ -8,7 +8,7 @@
 # until the placeholders are resolved.
 
 [Unit]
-Description=Voice Commander
+Description=Voice Commander (Whisper fork)
 After=graphical-session.target
 PartOf=graphical-session.target
 

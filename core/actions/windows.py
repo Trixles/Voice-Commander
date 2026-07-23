@@ -34,6 +34,7 @@ import json
 import os
 import re
 
+import core.paths as paths
 from core.edid import get_monitor_friendly_names
 from core.matcher import _similarity
 from core.paths import CONFIG_PATH
@@ -130,7 +131,7 @@ def get_monitor_details() -> dict[str, str]:
 # The placer reads its signals from this kwinrc group. Two keys it watches:
 #   nextScreen -- queue outputs for ARRIVING windows ("open X on [alias]")
 #   moveActive -- move the CURRENTLY ACTIVE window now ("move to [alias]")
-_PLACER_GROUP = "Script-vc-window-placer"
+_PLACER_GROUP = f"Script-{paths.PLACER_ID}"
 _PLACER_KEYS = ("nextScreen", "moveActive")
 
 
@@ -150,10 +151,8 @@ def _signal_placer(active_key: str, value: str, gui_env: dict) -> None:
     no reconfigure is needed. `unloadScript` first stops the windowAdded handler
     from stacking across calls.
     """
-    placer_id = "vc-window-placer"
-    placer_path = os.path.expanduser(
-        "~/.local/share/kwin/scripts/vc-window-placer/contents/code/main.js"
-    )
+    placer_id = paths.PLACER_ID
+    placer_path = os.path.join(paths.PLACER_DIR, "contents/code/main.js")
     kwinrc = os.path.expanduser("~/.config/kwinrc")
 
     try:

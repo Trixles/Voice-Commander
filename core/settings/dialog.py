@@ -83,6 +83,7 @@ from core.aliases import (
 )
 from core.actions.windows import get_connected_outputs
 from core.env import GUI_ENV, blur_compositing_available
+from core.paths import ICON_DIR, SERVICE_NAME
 from core.run import run_capture
 from core.settings.style import build_stylesheet
 from core.settings.tabs.commands_tab import build as build_commands_tab
@@ -105,7 +106,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Voice Commander")
         self.setWindowIcon(QIcon(os.path.join(
-            os.path.expanduser("~/.local/share/voice-commander/icons"),
+            ICON_DIR,
             "vc-sleeping.svg"  # the blue icon (vc-listening is green); brand icon
         )))
         self.setMinimumWidth(540)
@@ -488,7 +489,7 @@ class SettingsDialog(QDialog):
         source). Read-only; called once at dialog open."""
         try:
             r = run_capture(
-                ["systemctl", "--user", "is-enabled", "voice-commander.service"],
+                ["systemctl", "--user", "is-enabled", SERVICE_NAME],
                 timeout=5,
             )
         except Exception as e:
@@ -507,7 +508,7 @@ class SettingsDialog(QDialog):
         verb = "enable" if enable else "disable"
         try:
             r = run_capture(
-                ["systemctl", "--user", verb, "voice-commander.service"],
+                ["systemctl", "--user", verb, SERVICE_NAME],
                 timeout=10,
             )
         except Exception as e:
@@ -517,7 +518,7 @@ class SettingsDialog(QDialog):
             print(f"[settings] autostart {verb} failed (rc={r.returncode}): "
                   f"{(r.stderr or '').strip()}")
             return False
-        print(f"[settings] autostart: {verb}d voice-commander.service")
+        print(f"[settings] autostart: {verb}d {SERVICE_NAME}")
         return True
 
     def _save(self) -> None:
@@ -643,7 +644,7 @@ class SettingsDialog(QDialog):
             print("[settings] Restart-requiring setting changed -- restarting service.")
             try:
                 result = run_capture(
-                    ["systemctl", "--user", "restart", "voice-commander"],
+                    ["systemctl", "--user", "restart", SERVICE_NAME],
                     timeout=10,
                 )
                 if result.returncode != 0:

@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 #
-# install.sh -- Voice Commander installer
+# install.sh -- Voice Commander (Whisper fork) installer
 #
-# Installs Voice Commander into XDG-standard locations:
+# THIS IS THE WHISPER FORK. It installs under voice-commander-whisper
+# everywhere, fully COEXISTING with a parent Vosk install -- separate
+# data/config dirs, service names, launcher, lock socket, and KWin
+# placer. It never touches the parent's files (it only READS them to
+# seed config / copy the vosk model on first install).
 #
-#   ~/.local/share/voice-commander/app/      -- application code
-#   ~/.local/share/voice-commander/venv/     -- Python virtual environment
-#   ~/.local/share/voice-commander/icons/    -- tray + service icons
-#   ~/.local/share/voice-commander/vosk-model/ -- speech recognition model
-#   ~/.local/share/kwin/scripts/vc-window-placer/ -- KWin helper script
-#   ~/.config/voice-commander/commands.json  -- user-editable config
-#   ~/.config/systemd/user/voice-commander.service -- service unit
-#   ~/.local/bin/voice-commander             -- launcher command
-#
-# After install, the service is enabled and started. The app appears in the
-# system tray, and 'voice-commander' is runnable from any terminal.
+#   ~/.local/share/voice-commander-whisper/app/      -- application code
+#   ~/.local/share/voice-commander-whisper/venv/     -- Python virtual environment
+#   ~/.local/share/voice-commander-whisper/icons/    -- tray + service icons
+#   ~/.local/share/voice-commander-whisper/vosk-model/ -- Vosk model (vosk backend)
+#   ~/.local/share/voice-commander-whisper/models/   -- whisper ggml + silero VAD
+#   ~/.local/share/kwin/scripts/vcw-window-placer/   -- KWin helper script
+#   ~/.config/voice-commander-whisper/commands.json  -- user-editable config
+#   ~/.config/systemd/user/voice-commander-whisper.service        -- app unit
+#   ~/.config/systemd/user/voice-commander-whisper-server.service -- whisper-server unit
+#   ~/.local/bin/voice-commander-whisper             -- launcher command
 #
 # Re-running this script is safe: it preserves the existing commands.json
 # and uninstalls/reinstalls everything else.
@@ -22,22 +25,37 @@
 set -euo pipefail
 
 # -- Constants ---------------------------------------------------------------
-readonly APP_NAME="voice-commander"
+readonly APP_NAME="voice-commander-whisper"
+# Parent (Vosk daily-driver) install, read-only: used to seed config and
+# copy the vosk model instead of re-downloading. Never written to.
+readonly PARENT_APP_NAME="voice-commander"
 readonly REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 readonly DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/${APP_NAME}"
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${APP_NAME}"
 readonly BIN_DIR="$HOME/.local/bin"
 readonly SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vc-window-placer"
+# Placer Id must match core/paths.py PLACER_ID -- it namespaces the kwinrc
+# queue group, keeping the fork's placement queue separate from the parent's.
+readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vcw-window-placer"
 
 readonly APP_DIR="${DATA_DIR}/app"
 readonly VENV_DIR="${DATA_DIR}/venv"
 readonly ICONS_DIR="${DATA_DIR}/icons"
 readonly VOSK_DIR="${DATA_DIR}/vosk-model"
+readonly MODELS_DIR="${DATA_DIR}/models"
+
+readonly PARENT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/${PARENT_APP_NAME}"
+readonly PARENT_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/${PARENT_APP_NAME}/commands.json"
 
 readonly VOSK_MODEL_NAME="vosk-model-small-en-us-0.15"
 readonly VOSK_MODEL_URL="https://alphacephei.com/vosk/models/${VOSK_MODEL_NAME}.zip"
+
+# Whisper backend assets. Model name must match the whisper_model config
+# default (core/commands.py --emit-defaults).
+readonly WHISPER_MODEL_NAME="base.en"
+readonly WHISPER_MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL_NAME}.bin"
+readonly SILERO_VAD_URL="https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/silero_vad.onnx"
 
 # Extract __version__ from core/__init__.py so we can echo it on success.
 # Pure-bash read keeps install.sh self-sufficient (no need to install the
@@ -249,6 +267,17 @@ install_vosk_model() {
         return
     fi
 
+    # A parent Vosk install already has this exact model: copy instead of
+    # re-downloading 40 MB. Read-only on the parent side.
+    local parent_model="${PARENT_DATA_DIR}/vosk-model/${VOSK_MODEL_NAME}"
+    if [[ -f "${parent_model}/am/final.mdl" ]]; then
+        info "Copying Vosk model from the parent install..."
+        mkdir -p "${VOSK_DIR}"
+        cp -r "${parent_model}" "${model_path}"
+        ok "Vosk model copied from ${parent_model}."
+        return
+    fi
+
     info "Downloading Vosk speech recognition model (~40 MB)..."
     mkdir -p "${VOSK_DIR}"
     local tmp_zip
@@ -270,12 +299,52 @@ install_vosk_model() {
     ok "Vosk model installed."
 }
 
+# -- Whisper backend models ---------------------------------------------------
+install_whisper_models() {
+    mkdir -p "${MODELS_DIR}/whisper"
+
+    local ggml="${MODELS_DIR}/whisper/ggml-${WHISPER_MODEL_NAME}.bin"
+    if [[ -f "${ggml}" ]]; then
+        ok "Whisper model already present, skipping download."
+    else
+        info "Downloading Whisper model ${WHISPER_MODEL_NAME} (~142 MB)..."
+        curl -fL --progress-bar -o "${ggml}" "${WHISPER_MODEL_URL}" \
+            || die "Failed to download Whisper model from ${WHISPER_MODEL_URL}"
+        ok "Whisper model installed."
+    fi
+
+    local silero="${MODELS_DIR}/silero_vad.onnx"
+    if [[ -f "${silero}" ]]; then
+        ok "Silero VAD model already present, skipping download."
+    else
+        info "Downloading Silero VAD model (~2 MB)..."
+        curl -fL --progress-bar -o "${silero}" "${SILERO_VAD_URL}" \
+            || die "Failed to download Silero VAD model from ${SILERO_VAD_URL}"
+        ok "Silero VAD model installed."
+    fi
+
+    # whisper-server is a system binary (pacman: whisper-cpp), not something
+    # we install. Only the whisper backend needs it, so warn instead of die.
+    if ! command -v whisper-server >/dev/null 2>&1; then
+        warn "whisper-server not found on PATH. The whisper backend needs it: install the 'whisper-cpp' package."
+    fi
+}
+
 # -- Config ------------------------------------------------------------------
 install_config() {
     mkdir -p "${CONFIG_DIR}"
     local config="${CONFIG_DIR}/commands.json"
     if [[ -f "${config}" ]]; then
         ok "Existing commands.json preserved (not overwritten)."
+    elif [[ -f "${PARENT_CONFIG}" ]]; then
+        # First install with a parent Vosk setup present: carry the user's
+        # commands/overrides/settings over instead of starting from defaults.
+        # Whisper-only keys are absent in the copy; the app falls back to
+        # their defaults (all getters use .get()). One-time copy -- the two
+        # configs are independent from here on.
+        info "Seeding commands.json from the parent install's config..."
+        cp "${PARENT_CONFIG}" "${config}"
+        ok "Config copied from ${PARENT_CONFIG} (now independent)."
     else
         info "Generating default commands.json..."
         # Generate the default config by running core.commands as a module.
@@ -310,8 +379,15 @@ install_service() {
         -e "s|@APP_DIR@|${APP_DIR}|g" \
         "${REPO_DIR}/voice-commander.service.in" > "${service_file}"
 
+    # whisper-server companion unit: BindsTo the app unit (never outlives
+    # it). Only actually started when recognizer_backend=whisper -- the app
+    # starts it on demand (core/whisper_server.py).
+    local server_unit="${SYSTEMD_USER_DIR}/${APP_NAME}-server.service"
+    sed -e "s|@APP_NAME@|${APP_NAME}|g" \
+        "${REPO_DIR}/vc-whisper-server.service.in" > "${server_unit}"
+
     systemctl --user daemon-reload
-    ok "Service unit installed at ${service_file}"
+    ok "Service units installed at ${service_file} and ${server_unit}"
 }
 
 # -- Launcher ----------------------------------------------------------------
@@ -330,7 +406,7 @@ EOF
     # Warn if ~/.local/bin is not on PATH.
     case ":${PATH}:" in
         *":${BIN_DIR}:"*) ;;
-        *) warn "${BIN_DIR} is not on your PATH. Add it to your shell config to use the 'voice-commander' command directly." ;;
+        *) warn "${BIN_DIR} is not on your PATH. Add it to your shell config to use the '${APP_NAME}' command directly." ;;
     esac
 }
 
@@ -343,7 +419,7 @@ install_desktop_file() {
     cat > "${desktop_file}" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Voice Commander
+Name=Voice Commander (Whisper)
 Comment=Hands-free voice control for your desktop
 Exec=${BIN_DIR}/${APP_NAME} --activate
 Icon=${ICONS_DIR}/vc-sleeping.svg
@@ -378,7 +454,7 @@ start_service() {
 
 # -- Main --------------------------------------------------------------------
 main() {
-    printf "${c_bold}Voice Commander installer${c_reset}\n"
+    printf "${c_bold}Voice Commander (Whisper fork) installer${c_reset}\n"
     printf "Repo:    %s\n" "${REPO_DIR}"
     printf "Install: %s\n" "${DATA_DIR}"
     echo
@@ -390,6 +466,7 @@ main() {
     install_icons
     install_kwin_script
     install_vosk_model
+    install_whisper_models
     install_readme
     install_config
     install_service
@@ -398,11 +475,11 @@ main() {
     start_service
 
     echo
-    printf "${c_green}${c_bold}Voice Commander ${VC_VERSION} is installed and running.${c_reset}\n"
+    printf "${c_green}${c_bold}Voice Commander (Whisper) ${VC_VERSION} is installed and running.${c_reset}\n"
     echo
-    printf "Check status:   ${c_bold}systemctl --user status voice-commander${c_reset}\n"
-    printf "View logs:      ${c_bold}journalctl --user -u voice-commander -f${c_reset}\n"
-    printf "Restart:        ${c_bold}systemctl --user restart voice-commander${c_reset}\n"
+    printf "Check status:   ${c_bold}systemctl --user status %s${c_reset}\n" "${APP_NAME}"
+    printf "View logs:      ${c_bold}journalctl --user -u %s -f${c_reset}\n" "${APP_NAME}"
+    printf "Restart:        ${c_bold}systemctl --user restart %s${c_reset}\n" "${APP_NAME}"
     printf "Open settings:  right-click the tray icon, or say your wake word followed by \"open settings\"\n"
     printf "Launch on login: ${c_bold}off by default${c_reset} -- turn it on in Settings -> Options\n"
     printf "Uninstall:      ${c_bold}./uninstall.sh${c_reset}\n"

@@ -447,11 +447,20 @@ companion — keep them in sync.
   ExecStart (env file is the config channel). Swallow systemctl
   stderr.
 
-### Install architecture: code lives in `~/.local/share/voice-commander/app/`
+### Install architecture: code lives in `~/.local/share/voice-commander-whisper/app/`
 - **What:** `install.sh` copies repo source to the XDG data dir; the
   systemd service runs from there. User can clone anywhere, install,
-  optionally delete the clone.
-- **Don't:** Point the service at the repo checkout.
+  optionally delete the clone. THIS FORK installs under its own
+  namespace end to end and COEXISTS with a parent `voice-commander`
+  install: `core/paths.py` is the single source of the identity
+  (APP_NAME, data/config dirs, unit names, placer Id `vcw-window-placer`,
+  single-instance lock name); `tests/test_fork_identity.py` sweeps
+  `core/` for hardcoded parent paths. install.sh reads the parent
+  install at most (seed commands.json on first install, copy the vosk
+  model instead of re-downloading) and never writes to it.
+- **Don't:** Point the service at the repo checkout. Hardcode
+  `voice-commander` (the parent namespace) anywhere in `core/` —
+  derive from `core/paths.py`. Let install.sh write to parent paths.
 
 ### ReSpeaker LED control depends on a udev rule the installer does NOT install
 - **What:** `hardware/respeaker.py` shells out to `xvf_host` to drive the

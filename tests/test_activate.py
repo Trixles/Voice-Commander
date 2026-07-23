@@ -88,7 +88,7 @@ def test_activate_starts_service_when_not_running(monkeypatch):
     rc = activate.activate(name=_TEST_SOCKET)
 
     assert rc == 0
-    assert calls == [["systemctl", "--user", "start", "voice-commander.service"]]
+    assert calls == [["systemctl", "--user", "start", "voice-commander-whisper.service"]]
 
 
 def test_activate_does_not_start_service_when_running(monkeypatch):

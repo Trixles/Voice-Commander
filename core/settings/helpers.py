@@ -92,8 +92,10 @@ _CONFIRM_NOTE = (
 
 # -- Path constants -----------------------------------------------------------
 
+from core.paths import DATA_DIR as _DATA_DIR
+
 DESKTOP_DIR      = "/usr/share/applications"
-VOSK_MODELS_DIR  = os.path.expanduser("~/.local/share/voice-commander/vosk-model/")
+VOSK_MODELS_DIR  = os.path.join(_DATA_DIR, "vosk-model/")
 
 
 # -- Display-name / slug helpers ----------------------------------------------

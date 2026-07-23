@@ -46,6 +46,7 @@ from core.matcher import (
 )
 from core.notify import notify as _notify
 from core.overrides import DEFAULT_OVERRIDES
+import core.paths as paths
 from core.paths import CONFIG_PATH
 from core.run import run_capture
 
@@ -154,7 +155,7 @@ def _detect_default_browser() -> str | None:
     return None
 
 
-_README_DEFAULT_PATH = os.path.expanduser("~/.local/share/voice-commander/README.md")
+_README_DEFAULT_PATH = os.path.join(paths.DATA_DIR, "README.md")
 
 
 def _default_system_commands() -> list[dict]:
@@ -563,12 +564,12 @@ def get_overrides() -> list[dict]:
     return user + defaults
 
 
-_DEFAULT_VOSK_MODEL_DIR  = os.path.expanduser("~/.local/share/voice-commander/vosk-model/")
+_DEFAULT_VOSK_MODEL_DIR  = os.path.join(paths.DATA_DIR, "vosk-model/")
 _DEFAULT_VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
 
 # Whisper-backend model files (ggml weights for whisper-server, Silero VAD
 # onnx) live under a shared models/ dir, unlike the legacy vosk-model/ dir.
-_MODELS_DIR = os.path.expanduser("~/.local/share/voice-commander/models/")
+_MODELS_DIR = os.path.join(paths.DATA_DIR, "models/")
 
 
 def get_recognizer_backend() -> str:

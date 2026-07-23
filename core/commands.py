@@ -602,6 +602,28 @@ def get_vad_model_path() -> str:
     return os.path.join(_MODELS_DIR, "silero_vad.onnx")
 
 
+def get_wake_engine() -> str:
+    """'text' (classic transcription-based wake detection) or
+    'openwakeword' (audio-level engine, ~100-200ms ack). Unknown values
+    fall back to text -- always-works beats fast-but-absent."""
+    engine = _config.get("wake_engine", "text")
+    if engine not in ("text", "openwakeword"):
+        print(f"[commands] Unknown wake_engine {engine!r}, using text.")
+        return "text"
+    return engine
+
+
+def get_wake_model_path() -> str:
+    """Wake models are drop-in .onnx files in DATA_DIR/wakewords/;
+    'wake_model' is the file stem (future GUI dropdown scans the dir)."""
+    name = str(_config.get("wake_model", "computer_v2")).strip() or "computer_v2"
+    return os.path.join(paths.DATA_DIR, "wakewords", f"{name}.onnx")
+
+
+def get_wake_threshold() -> float:
+    return float(_config.get("wake_threshold", 0.5))
+
+
 def get_vosk_model_path() -> str:
     """
     Return the absolute path to the Vosk model directory.
@@ -1423,6 +1445,9 @@ if __name__ == "__main__":
             "whisper_model": "base.en",
             "whisper_server_port": 8910,
             "whisper_vad_tail_ms": 400,
+            "wake_engine": "text",
+            "wake_model": "computer_v2",
+            "wake_threshold": 0.5,
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],

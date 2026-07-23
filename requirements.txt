@@ -6,3 +6,8 @@ PySide6>=6.6.0
 # not in Python.
 onnxruntime>=1.20.0
 numpy>=1.26.0
+# openWakeWord runtime needs (the package itself is installed --no-deps in
+# install.sh because its declared tflite-runtime dep has no py3.13+ wheels).
+tqdm>=4.60.0
+scipy>=1.11.0
+requests>=2.30.0

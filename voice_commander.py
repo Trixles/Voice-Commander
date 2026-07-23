@@ -47,6 +47,7 @@ from core.context import Context, State
 from core.env import GUI_ENV
 from core.listener import run_listener, wait_for_mic_ready
 from core.recognizer import make_recognizer_factory
+from core.wakeword import make_wake_engine_factory
 from core.run import get_default_source
 from core.tray import VoiceCommanderTray
 from core.wake import WakeWordDetector
@@ -120,6 +121,7 @@ def _listener_thread(
     gui_env: dict,
     state_queue: queue.Queue,
     command_queue: queue.Queue,
+    wake_engine_factory=None,
 ) -> None:
     """Outer restart loop for the listener, runs in a background thread."""
     first_run = True
@@ -150,6 +152,7 @@ def _listener_thread(
             gui_env=gui_env,
             state_queue=state_queue,
             command_queue=command_queue,
+            wake_engine_factory=wake_engine_factory,
         )
 
         time.sleep(2)
@@ -208,13 +211,23 @@ def main() -> None:
         sys.exit(1)
     print("[voice-commander-whisper] Recognizer ready.")
 
+    # Audio wake engine (None for wake_engine=text -> classic behavior).
+    try:
+        wake_engine_factory = make_wake_engine_factory()
+    except Exception as e:
+        print(f"[voice-commander-whisper] ERROR: Failed to set up wake engine: {e}", file=sys.stderr)
+        sys.exit(1)
+    if wake_engine_factory is not None:
+        print("[voice-commander-whisper] Audio wake engine: openwakeword")
+
     state_queue   = queue.Queue()
     command_queue = queue.Queue()
 
     # Listener runs in a background thread; Qt owns the main thread
     t = threading.Thread(
         target=_listener_thread,
-        args=(recognizer_factory, detector, context, GUI_ENV, state_queue, command_queue),
+        args=(recognizer_factory, detector, context, GUI_ENV, state_queue,
+              command_queue, wake_engine_factory),
         daemon=True,
     )
     t.start()

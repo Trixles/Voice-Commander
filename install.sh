@@ -232,6 +232,11 @@ install_venv() {
     python3 -m venv "${VENV_DIR}"
     "${VENV_DIR}/bin/pip" install --quiet --upgrade pip
     "${VENV_DIR}/bin/pip" install --quiet -r "${REPO_DIR}/requirements.txt"
+    # openwakeword 0.6.0 hard-depends on tflite-runtime, which has no
+    # wheels for recent Pythons (3.13+). We only use the onnx path, so
+    # install without deps; its actual needs (onnxruntime, numpy, tqdm,
+    # scipy, requests) come from requirements.txt.
+    "${VENV_DIR}/bin/pip" install --quiet --no-deps openwakeword==0.6.0
     ok "Virtual environment ready."
 }
 
@@ -336,6 +341,34 @@ install_whisper_models() {
     if ! command -v whisper-server >/dev/null 2>&1; then
         warn "whisper-server not found on PATH. The whisper backend needs it: install the 'whisper-cpp' package."
     fi
+}
+
+# -- Wake word models ----------------------------------------------------------
+install_wakeword_models() {
+    mkdir -p "${DATA_DIR}/wakewords"
+
+    # Community "computer" model (drop-in dir: users can add any oww .onnx
+    # and pick it via the wake_model config key / future GUI dropdown).
+    local wake_model="${DATA_DIR}/wakewords/computer_v2.onnx"
+    if [[ -f "${wake_model}" ]]; then
+        ok "Wake model already present, skipping download."
+    else
+        info "Downloading 'computer' wake model (~200 KB)..."
+        curl -fsL -o "${wake_model}" \
+            "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/main/en/computer/computer_v2.onnx" \
+            || die "Failed to download wake model."
+        ok "Wake model installed."
+    fi
+
+    # openWakeWord's shared feature models (melspectrogram + embedding),
+    # downloaded into the venv's package resources where the library
+    # expects them. Idempotent: skips files that already exist.
+    info "Fetching openWakeWord feature models..."
+    "${VENV_DIR}/bin/python" - <<'PYEOF' || die "Failed to download openWakeWord feature models."
+import openwakeword.utils
+openwakeword.utils.download_models(model_names=["none"])
+PYEOF
+    ok "openWakeWord feature models ready."
 }
 
 # -- Config ------------------------------------------------------------------
@@ -490,6 +523,7 @@ main() {
     install_kwin_script
     install_vosk_model
     install_whisper_models
+    install_wakeword_models
     install_readme
     install_config
     install_service

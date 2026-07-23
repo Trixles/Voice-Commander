@@ -71,6 +71,10 @@ class VoskRecognizer:
     returns an event, never None.
     """
 
+    # A whole command chain arrives in ONE final (the engine's endpointer
+    # decides utterance boundaries) -- the listener sleeps after a match.
+    per_segment_finals = False
+
     def __init__(self, model):
         import vosk  # deferred: only a Vosk-backend install needs the package
 
@@ -107,6 +111,11 @@ class WhisperRecognizer:
     first tail chunk after it are included in the segment, because word
     boundaries never align with chunk edges.
     """
+
+    # Each VAD segment of a chain arrives as its OWN final -- the listener
+    # must keep LISTENING after a match so the rest of the chain can land
+    # (see "per-segment chains" in the listener).
+    per_segment_finals = True
 
     def __init__(self, vad, transcribe, tail_ms: int = 400):
         self._vad = vad

@@ -168,7 +168,11 @@ def _normalize(text: str) -> str:
     split is intentional: hallucination filters are plumbing for artifacts
     the user never said; overrides are 'Vosk heard X, user meant Y'.
     """
-    return text.removeprefix("the ")
+    # Leading "and ": per-segment chains (whisper backend) deliver "...and
+    # open kate..." as its own segment; the connective is chain glue, not
+    # command text. Harmless under Vosk (a final almost never starts with
+    # a bare connective that isn't chain-related).
+    return text.removeprefix("and ").removeprefix("the ")
 
 
 def _is_open_mic_command(text: str) -> bool:
@@ -197,6 +201,7 @@ def run_listener(
     gui_env: dict,
     state_queue=None,
     command_queue=None,
+    wake_engine_factory=None,
 ) -> None:
     """
     Run the main audio capture + recognition loop on `source`.
@@ -208,6 +213,12 @@ def run_listener(
                           run_listener invocation, so a mic restart gets a
                           fresh recognizer while heavy engine state (e.g. the
                           Vosk model) stays alive inside the factory's closure.
+    wake_engine_factory -- optional zero-arg callable returning an audio wake
+                          engine (core/wakeword.py): feed(chunk) -> fired?.
+                          Fed ONLY in SLEEPING; a fire acknowledges the wake
+                          instantly (~100-200ms) instead of waiting for the
+                          recognizer's transcription. None = classic
+                          text-based wake only.
     state_queue   -- if provided, push State values whenever context.state changes
     command_queue -- if provided, check each loop for 'toggle_open_mic' / 'quit'
     """
@@ -233,6 +244,14 @@ def run_listener(
     proc = _open_pw_record(source)
     audio_queue = _start_reader(proc)
 
+    # Batch backends (whisper) deliver each VAD segment of a chain as its
+    # OWN final. For those, a successful match must keep LISTENING so the
+    # rest of the chain can land -- the inactivity window is the chain's
+    # lifetime. Streaming backends (vosk) get a whole chain in one final
+    # and keep the classic match -> sleep behavior.
+    per_segment = getattr(rec, "per_segment_finals", False)
+    wake_engine = wake_engine_factory() if wake_engine_factory is not None else None
+
     print(f"[listener] Listening on: {source}")
 
     command_window_start: float = 0.0
@@ -240,6 +259,7 @@ def run_listener(
     confirm_start: float = 0.0
     pre_confirm_state: State = State.SLEEPING  # state to restore on cancel/timeout
     mic_check_counter: int = 0
+    matched_since_wake: bool = False  # gates the "No match" toast at expiry
 
     while True:
         try:
@@ -262,10 +282,17 @@ def run_listener(
 
         if context.state == State.LISTENING:
             if now - command_window_start > command_window:
-                print("[listener] Command window expired, back to sleep.")
-                _notify_general("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match (window expired)")
-                set_state(State.SLEEPING)
+                if matched_since_wake:
+                    # A per-segment chain that already fired >=1 command just
+                    # ran out of follow-ups. That's success, not a miss --
+                    # no toast.
+                    print("[listener] Chain window closed, back to sleep.")
+                    set_state(State.SLEEPING)
+                else:
+                    print("[listener] Command window expired, back to sleep.")
+                    _notify_general("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
+                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match (window expired)")
+                    set_state(State.SLEEPING)
 
         elif context.state == State.CONFIRMING:
             if now - confirm_start > CONFIRM_WINDOW:
@@ -311,6 +338,23 @@ def run_listener(
             except queue.Empty:
                 pass
 
+        # -- Audio wake engine (openWakeWord) ---------------------------------
+        # Fed ONLY in SLEEPING: once awake, transcription owns the show. The
+        # recognizer still consumes this same chunk below -- the wake
+        # utterance's eventual final is absorbed by the existing paths
+        # (wake-only -> swallowed; wake+command -> matcher tolerates the
+        # prefix), so an audio wake needs no new state handling.
+        if wake_engine is not None and context.state == State.SLEEPING:
+            if wake_engine.feed(data):
+                command_window = commands.get_command_window()
+                matched_since_wake = False
+                print("[listener] Wake word detected (audio engine).")
+                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
+                _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
+                set_state(State.LISTENING)
+                command_window_start = now
+                print("[listener] -> LISTENING (audio wake)")
+
         event = rec.feed(data)
         if event is None:
             # Backend has nothing to report for this chunk (e.g. a batch
@@ -352,6 +396,7 @@ def run_listener(
             if context.state == State.SLEEPING:
                 if partial and detector.check(partial):
                     command_window = commands.get_command_window()
+                    matched_since_wake = False
                     print("[listener] Wake word detected (partial).")
                     LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
                     _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
@@ -391,10 +436,19 @@ def run_listener(
             if commands.try_match(text, gui_env, context):
                 if context.pending_confirm:
                     enter_confirming(State.SLEEPING, now)
+                elif per_segment:
+                    # Wake+command in one segment; the chain may continue
+                    # after a pause -- keep the window open for it.
+                    matched_since_wake = True
+                    set_state(State.LISTENING)
+                    command_window_start = now
+                    command_window = commands.get_command_window()
+                    print("[listener] Command matched in wake utterance, window open for chain.")
                 else:
                     print("[listener] Command matched in wake utterance, back to sleep.")
                     set_state(State.SLEEPING)
             else:
+                matched_since_wake = False
                 set_state(State.LISTENING)
                 command_window_start = now
                 command_window = commands.get_command_window()
@@ -421,6 +475,13 @@ def run_listener(
             if commands.try_match(text, gui_env, context):
                 if context.pending_confirm:
                     enter_confirming(State.LISTENING, now)
+                elif per_segment:
+                    # Per-segment chain: this final was one installment.
+                    # Refresh the window and keep LISTENING for the next
+                    # segment; expiry (or a total miss) ends the chain.
+                    matched_since_wake = True
+                    command_window_start = now
+                    print("[listener] Command matched, window open for chain.")
                 else:
                     print("[listener] Command matched, back to sleep.")
                     set_state(State.SLEEPING)

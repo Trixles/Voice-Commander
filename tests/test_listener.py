@@ -36,7 +36,8 @@ class ScriptedRecognizer:
         return self.events.pop(0)
 
 
-def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING):
+def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
+                rec_cls=ScriptedRecognizer, wake_engine=None):
     """Drive run_listener over `events` and return the harness artifacts."""
     # LISTENING can only be entered through the wake path in production --
     # that's what arms command_window_start. Injecting the state directly
@@ -79,7 +80,7 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING):
 
     context = Context()
     context.state = state
-    rec = ScriptedRecognizer(events)
+    rec = rec_cls(events)
     factories = []
     state_queue = queue.Queue()
 
@@ -94,6 +95,7 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING):
         context=context,
         gui_env={},
         state_queue=state_queue,
+        wake_engine_factory=(lambda: wake_engine) if wake_engine else None,
     )
 
     states = []
@@ -245,3 +247,172 @@ def test_listener_module_does_not_import_vosk():
     # Whisper-only install never needs the vosk package.
     import core.listener as mod
     assert not hasattr(mod, "vosk")
+
+
+# -- Per-segment chains (whisper-mode: matches keep the window open) ----------
+
+class PerSegmentRecognizer(ScriptedRecognizer):
+    per_segment_finals = True
+
+
+def run_per_segment(events, monkeypatch, **kwargs):
+    return run_machine(events, monkeypatch, rec_cls=PerSegmentRecognizer, **kwargs)
+
+
+def test_per_segment_match_stays_listening_for_the_next_segment(monkeypatch):
+    # THE paused-chain fix (s30 live test): under a batch backend each
+    # chain segment arrives as its OWN final. Sleeping after the first
+    # match discards the rest of the chain -- a match must keep LISTENING.
+    r = run_per_segment(
+        [
+            RecognizerEvent("final", "computer"),        # wake
+            RecognizerEvent("final", "open dolphin on monitor one"),
+            RecognizerEvent("final", "and open dolphin on monitor two"),
+        ],
+        monkeypatch,
+        try_match=lambda t: t != "computer",
+    )
+    # The wake utterance itself passes through try_match (production
+    # behavior -- it returns False for a bare wake word), so it appears
+    # in the recorder before the two real segments.
+    assert r["matched"] == [
+        "computer",
+        "open dolphin on monitor one",
+        "open dolphin on monitor two",   # leading "and " stripped
+    ]
+    assert r["context"].state == State.LISTENING  # window still open at end
+
+
+def test_vosk_mode_still_sleeps_after_match(monkeypatch):
+    # Default recognizers (no per_segment_finals) keep the classic
+    # behavior: chain arrives in one final, match -> back to sleep.
+    r = run_machine(
+        [RecognizerEvent("final", "open firefox")],
+        monkeypatch,
+        state=State.LISTENING,
+    )
+    assert r["context"].state == State.SLEEPING
+
+
+def test_wake_and_command_in_one_final_stays_listening_per_segment(monkeypatch):
+    # "computer open kate..." as a single utterance, then a pause, then
+    # more chain: the wake-utterance match must also keep LISTENING.
+    r = run_per_segment(
+        [
+            RecognizerEvent("final", "computer open kate on monitor three"),
+            RecognizerEvent("final", "and lower volume"),
+        ],
+        monkeypatch,
+    )
+    assert len(r["matched"]) == 2
+    assert r["context"].state == State.LISTENING
+
+
+def test_window_expiry_after_successful_match_is_silent(monkeypatch):
+    # A chain that matched something must NOT toast "No match" when the
+    # window finally expires -- that toast is for failed wakes only.
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(listener.time, "time", lambda: clock["t"])
+
+    events = [
+        RecognizerEvent("final", "computer"),
+        RecognizerEvent("final", "open firefox"),   # matches, stays LISTENING
+        RecognizerEvent("partial", ""),             # 20s later: window expired
+    ]
+    kwargs = {"try_match": lambda t: t != "computer"}
+    orig_feed = ScriptedRecognizer.feed
+    advances = [2.0, 20.0, 0.0]  # command lands IN window; then 20s of silence
+
+    def feed_and_advance(self, data):
+        ev = orig_feed(self, data)
+        clock["t"] += advances.pop(0)
+        return ev
+
+    monkeypatch.setattr(PerSegmentRecognizer, "feed", feed_and_advance)
+    r = run_per_segment(events, monkeypatch, **kwargs)
+    assert r["matched"] == ["computer", "open firefox"]  # the chain DID fire
+    assert r["context"].state == State.SLEEPING
+    assert not any("No match" in str(n) for n in r["notifications"])
+
+
+def test_window_expiry_with_no_match_still_toasts(monkeypatch):
+    # The one-shot "No match" behavior survives for a wake that never
+    # produced a command (existing invariant, now conditional).
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(listener.time, "time", lambda: clock["t"])
+
+    events = [
+        RecognizerEvent("final", "computer"),
+        RecognizerEvent("partial", ""),   # 20s later, nothing matched
+    ]
+    kwargs = {"try_match": lambda t: False}
+    orig_feed = ScriptedRecognizer.feed
+
+    def feed_and_advance(self, data):
+        ev = orig_feed(self, data)
+        clock["t"] += 20.0
+        return ev
+
+    monkeypatch.setattr(PerSegmentRecognizer, "feed", feed_and_advance)
+    r = run_per_segment(events, monkeypatch, **kwargs)
+    assert r["context"].state == State.SLEEPING
+    assert any("No match" in str(n) for n in r["notifications"])
+
+
+# -- Audio wake engine (openWakeWord) -----------------------------------------
+
+class FakeWakeEngine:
+    """Scripted audio wake: fires on the feed() calls marked True."""
+
+    def __init__(self, fires):
+        self.fires = list(fires)
+        self.fed = []
+
+    def feed(self, data):
+        self.fed.append(data)
+        return self.fires.pop(0)
+
+
+def test_audio_wake_fires_into_listening_without_text(monkeypatch):
+    # The whole point: SLEEPING -> LISTENING off the audio engine
+    # (~100-200ms), no transcription involved in the ack.
+    engine = FakeWakeEngine(fires=[True])
+    r = run_machine(
+        [RecognizerEvent("speech", "")],   # recognizer still buffering
+        monkeypatch,
+        wake_engine=engine,
+    )
+    assert State.LISTENING in r["states"]
+
+
+def test_audio_wake_engine_not_fed_outside_sleeping(monkeypatch):
+    engine = FakeWakeEngine(fires=[True, False, False])
+    r = run_machine(
+        [
+            RecognizerEvent("speech", ""),   # chunk 1: fires -> LISTENING
+            RecognizerEvent("speech", ""),   # chunk 2: LISTENING, not fed
+            RecognizerEvent("speech", ""),   # chunk 3: LISTENING, not fed
+        ],
+        monkeypatch,
+        wake_engine=engine,
+    )
+    assert len(engine.fed) == 1  # only the SLEEPING chunk reached the engine
+
+
+def test_wake_final_after_audio_wake_is_swallowed(monkeypatch):
+    # The utterance that fired the audio wake still produces a whisper
+    # final ("computer") a beat later -- the existing wake-only swallow
+    # must absorb it and keep LISTENING for the real command.
+    engine = FakeWakeEngine(fires=[True, False, False])
+    r = run_machine(
+        [
+            RecognizerEvent("speech", ""),
+            RecognizerEvent("final", "computer"),
+            RecognizerEvent("final", "open firefox"),
+        ],
+        monkeypatch,
+        wake_engine=engine,
+        try_match=lambda t: t != "computer",
+    )
+    assert r["matched"] == ["open firefox"]
+    assert State.LISTENING in r["states"]

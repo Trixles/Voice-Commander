@@ -103,9 +103,10 @@ companion — keep them in sync.
 ### Vosk normalization split: hallucination filter vs user overrides
 - **What:** Two separate, sequential rewrites of Vosk transcripts
   before matching, in this order:
-  1. `_normalize()` in `core/listener.py` — hallucination filter for
-     mic AGC artifacts the user never said. Currently a single rule
-     (strip leading `"the "`). Plumbing, not user-facing.
+  1. `_normalize()` in `core/listener.py` — plumbing rewrites, not
+     user-facing. Two rules: strip leading `"and "` (chain glue on
+     per-segment follow-up segments, s30) then leading `"the "`
+     (mic-AGC hallucination artifact).
   2. `apply_overrides()` in `core/overrides.py` — user-configurable
      mishearing rewrites (Vosk heard X, user meant Y). `get_overrides()`
      in `commands.py` assembles the final list: **USER rules first**, then
@@ -909,6 +910,31 @@ companion — keep them in sync.
     SLEEPING immediately. A partial-good chain returns True from `try_match`
     (see "Chains partial-execute") and never reaches this path, so its
     per-segment toasts are unaffected.
+  - **Per-segment chains (s30):** recognizers advertise
+    `per_segment_finals` (True on WhisperRecognizer, False on Vosk).
+    When True, a successful match KEEPS the listener in LISTENING with
+    the window refreshed — batch backends deliver each VAD segment of a
+    paused chain as its own final, and sleeping after the first match
+    discards the rest of the chain (the s30 live-test bug). This applies
+    to the wake-utterance match too ("computer open X", pause, "and Y").
+    The chain ends on window expiry or a total miss. Expiry after ≥1
+    successful match sleeps SILENTLY (`matched_since_wake` flag) — the
+    "No match" toast is only for a wake that never produced a command.
+    `_normalize` also strips a leading "and " (chain glue on follow-up
+    segments). Vosk-mode behavior (match → sleep) is unchanged.
+  - **Audio wake engine (s31):** with config `wake_engine=openwakeword`,
+    an `OpenWakeWordEngine` (`core/wakeword.py`; model file from
+    `DATA_DIR/wakewords/<wake_model>.onnx`, threshold `wake_threshold`)
+    is fed each chunk ONLY in SLEEPING; a fire acknowledges the wake
+    instantly (~100-200ms) via the same ack path as text wake. The
+    recognizer still consumes the same chunks, and the wake utterance's
+    eventual final is absorbed by the existing rules (wake-only →
+    swallowed; wake+command → matcher tolerates the prefix) — audio
+    wake adds NO new states. The engine resets its own rolling state on
+    fire so re-entering SLEEPING can't re-fire on stale audio.
+    `wake_engine=text` (default) keeps classic transcription-based
+    wake. openwakeword installs `--no-deps` (its tflite-runtime dep
+    has no py3.13+ wheels; onnx path only — see install.sh).
 - **Why:** Pre-fix, feedback waited for finalize, so "Listening…" arrived ~1.5s
   late or simultaneously with execution. And a no-match used to leave you in
   LISTENING, so the command-window-expiry path fired a SECOND "No match" — two

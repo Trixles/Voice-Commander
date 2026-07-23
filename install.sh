@@ -250,6 +250,14 @@ install_kwin_script() {
     mkdir -p "${KWIN_SCRIPT_DIR}"
     cp -r "${REPO_DIR}/vc-window-placer/." "${KWIN_SCRIPT_DIR}/"
 
+    # CRITICAL: KWin refuses to start() a script whose plugin Id matches an
+    # installed package that isn't enabled in [Plugins] -- loadScript returns
+    # a valid id and start() succeeds, but the script is silently discarded.
+    # (Found the hard way: every placement no-oped. The parent install only
+    # worked because Tyler had enabled its plugin by hand years ago.)
+    kwriteconfig6 --file "${XDG_CONFIG_HOME:-$HOME/.config}/kwinrc" \
+        --group Plugins --key "vcw-window-placerEnabled" true
+
     # Tell KWin to reload its script list.
     if command -v dbus-send >/dev/null 2>&1; then
         dbus-send --session --print-reply \
@@ -344,6 +352,21 @@ install_config() {
         # configs are independent from here on.
         info "Seeding commands.json from the parent install's config..."
         cp "${PARENT_CONFIG}" "${config}"
+        # A Models-tab absolute path in vosk_model would point the fork at
+        # the PARENT's model dir (breaks if the parent is uninstalled). The
+        # fork has its own copy, so reduce it to the bare model name, which
+        # resolves against the fork's model dir.
+        "${VENV_DIR}/bin/python" - "${config}" <<'PYEOF'
+import json, os, sys
+path = sys.argv[1]
+with open(path) as f:
+    cfg = json.load(f)
+raw = cfg.get("vosk_model", "")
+if os.path.isabs(raw):
+    cfg["vosk_model"] = os.path.basename(raw.rstrip("/"))
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=2)
+PYEOF
         ok "Config copied from ${PARENT_CONFIG} (now independent)."
     else
         info "Generating default commands.json..."

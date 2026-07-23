@@ -37,6 +37,7 @@ import re
 import core.paths as paths
 from core.edid import get_monitor_friendly_names
 from core.matcher import _similarity
+from core.notify import notify
 from core.paths import CONFIG_PATH
 from core.run import run_bg, run_capture
 
@@ -177,21 +178,69 @@ def _signal_placer(active_key: str, value: str, gui_env: dict) -> None:
              f"string:{placer_path}", f"string:{placer_id}"),
             ("org.kde.kwin.Scripting.start",),
         ):
-            run_capture(
+            result = run_capture(
                 ["dbus-send", "--session", "--print-reply",
                  "--dest=org.kde.KWin", "/Scripting", *tail],
                 env=gui_env,
+            )
+            # unloadScript legitimately returns "boolean false" when nothing
+            # was loaded -- only the transport failing is an error here.
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"dbus-send {tail[0].rsplit('.', 1)[-1]} exited "
+                    f"{result.returncode}: {result.stderr.strip()}"
+                )
+
+        # Sentinel: a clean loadScript id + clean start() reply does NOT
+        # mean the script ran. KWin silently discards scripts whose plugin
+        # Id matches an installed-but-not-enabled package (see the
+        # "[Plugins]" invariant, found in the s30 live test), and a script
+        # that throws at execution dies just as quietly. isScriptLoaded is
+        # the only truth: false here = placement is DEAD and the next
+        # window will land on the focused screen. Fail LOUD.
+        check = run_capture(
+            ["dbus-send", "--session", "--print-reply",
+             "--dest=org.kde.KWin", "/Scripting",
+             "org.kde.kwin.Scripting.isScriptLoaded", f"string:{placer_id}"],
+            env=gui_env,
+        )
+        if check.returncode != 0 or "boolean true" not in check.stdout:
+            raise RuntimeError(
+                f"placer script is NOT running after start() "
+                f"(isScriptLoaded: rc={check.returncode}, "
+                f"reply={check.stdout.strip()!r}). Windows will not be "
+                f"placed. Is '{placer_id}Enabled' true in kwinrc [Plugins]?"
             )
 
         print(f"[windows] Placer signal: {active_key}={value!r}")
     except Exception as e:
         print(f"[windows] _signal_placer failed: {e}")
+        # Deliberately NOT gated on the notifications toggle: a dead placer
+        # silently mis-places every window (Tyler's most-hated bug class).
+        # Same always-fire rule as the destructive-command confirm prompts.
+        notify("Window placement failed",
+               "The KWin placer script is not running -- check the journal.",
+               gui_env=gui_env)
 
 
 def write_next_screen(output_name: str, gui_env: dict) -> None:
     """Queue `output_name` for the next ARRIVING normal window ("open X on
     [alias]"). Thin wrapper over _signal_placer; pass "" to clear the queue."""
     _signal_placer("nextScreen", output_name, gui_env)
+
+
+def clear_placer_queue(gui_env: dict) -> None:
+    """Wipe both placer keys and re-execute the script with the empty queue.
+
+    Called once at app startup: kwinrc queue entries persist across
+    sessions, and KWin auto-loads enabled script plugins at login -- so a
+    stale queue from a past session sits armed and yanks unrelated windows
+    (the "misplacing AGAIN" login-zombie). Clearing at startup guarantees a
+    queue can never outlive the app session that wrote it. Bonus: this
+    exercises the full placement chain at boot, so the _signal_placer
+    sentinel surfaces a dead placer immediately, not on the first command.
+    """
+    _signal_placer("nextScreen", "", gui_env)
 
 
 def _resolve_output_alias(raw: str) -> str:

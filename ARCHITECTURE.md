@@ -652,6 +652,37 @@ companion — keep them in sync.
   reload (each `loadScript` creates a fresh JS engine).
 - **Don't:** Add `reconfigure` back. Drop `unloadScript`.
 
+### The placer's plugin Id MUST be enabled in kwinrc `[Plugins]`
+- **What:** `install.sh` writes `vcw-window-placerEnabled=true` into
+  kwinrc's `[Plugins]` group. When a `loadScript` pluginName matches an
+  INSTALLED script package whose plugin is not enabled there, KWin
+  accepts the load (valid script id, clean `start()` reply) and then
+  silently discards the script — it never executes a single line.
+  `isScriptLoaded` flips back to false after `start()`; nothing is
+  logged anywhere. Ad-hoc names matching no installed package run
+  without any flag.
+- **Why:** Found via the fork's first live test (s30): every placement
+  no-oped and windows landed on the focused screen. The parent install
+  only ever worked because its flag was set by hand (KWin Scripts KCM)
+  during original development — the parent's install.sh has the same
+  latent gap on a fresh machine.
+- **Armor (s30):** the whole placement chain fails SILENT (clean
+  subprocess exits, clean dbus replies, discarded script, window lands
+  on the focused screen) — so `_signal_placer` now checks every
+  dbus-send return code AND verifies `isScriptLoaded` after `start()`;
+  any failure logs loudly and fires an ALWAYS-ON toast ("Window
+  placement failed" — deliberately not gated on the notifications
+  toggle, same rule as confirm prompts). `clear_placer_queue()` runs
+  at app startup: wipes both queue keys so a stale queue can never
+  outlive its session (kwinrc queues persist and auto-arm at login —
+  the historical "misplacing AGAIN" zombie), and exercises the chain
+  at boot so the sentinel catches a dead placer on day one.
+- **Don't:** Remove the kwriteconfig6 enable line from
+  `install_kwin_script`. Assume a clean `loadScript`/`start` reply
+  means the script ran — `isScriptLoaded` is the only truth. Gate the
+  placement-failed toast on the notifications toggle. Drop the
+  startup `clear_placer_queue()` call.
+
 ### Placer queue entries are `output:wm_class` pairs
 - **What:** Python writes `kwinrc nextScreen` as comma-separated
   `output:tag` entries (e.g. `DP-2:waterfox-g,HDMI-A-1:dolphin`).

@@ -145,7 +145,17 @@ class WhisperRecognizer:
         self._in_speech = False
         self._silence_ms = 0.0
         self._preroll = data
-        text = _clean_whisper_text(self._transcribe(pcm))
+        try:
+            raw = self._transcribe(pcm)
+        except Exception as e:
+            # Server down/unreachable: drop THIS segment loudly but keep
+            # the recognizer alive -- an exception escaping feed() kills
+            # the listener thread and leaves the app deaf with a healthy
+            # tray icon. systemd is restarting the server (Restart=
+            # on-failure); the next segment gets a fresh chance.
+            print(f"[recognizer] transcribe failed, segment dropped: {e}")
+            return None
+        text = _clean_whisper_text(raw)
         if not text:
             return None
         return RecognizerEvent(kind="final", text=text)

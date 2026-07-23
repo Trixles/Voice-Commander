@@ -50,7 +50,7 @@ from core.recognizer import make_recognizer_factory
 from core.run import get_default_source
 from core.tray import VoiceCommanderTray
 from core.wake import WakeWordDetector
-from core.actions.windows import refresh_monitor_map
+from core.actions.windows import clear_placer_queue, refresh_monitor_map
 
 
 # -- Single-instance guard ---------------------------------------------------
@@ -183,6 +183,12 @@ def main() -> None:
         sys.exit(1)
     refresh_monitor_map(GUI_ENV)
     commands.seed_monitor_defaults()
+
+    # Stale placer queues persist in kwinrc across sessions and auto-arm at
+    # login (KWin loads enabled script plugins with whatever queue is left).
+    # Wipe at startup so a queue can never outlive the session that wrote
+    # it; also fires the placement sentinel on day one if the chain is dead.
+    clear_placer_queue(GUI_ENV)
 
     wake_words = commands.get_wake_words()
     detector = WakeWordDetector(wake_words)

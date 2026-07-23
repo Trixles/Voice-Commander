@@ -8,6 +8,9 @@ onnxruntime>=1.20.0
 numpy>=1.26.0
 # openWakeWord runtime needs (the package itself is installed --no-deps in
 # install.sh because its declared tflite-runtime dep has no py3.13+ wheels).
+# scikit-learn: openwakeword/__init__ unconditionally imports its
+# custom-verifier module, which imports sklearn -- import fails without it.
 tqdm>=4.60.0
 scipy>=1.11.0
 requests>=2.30.0
+scikit-learn>=1.4.0

@@ -416,3 +416,39 @@ def test_wake_final_after_audio_wake_is_swallowed(monkeypatch):
     )
     assert r["matched"] == ["open firefox"]
     assert State.LISTENING in r["states"]
+
+
+def test_wake_engine_factory_failure_degrades_to_text_wake(monkeypatch, capsys):
+    # A broken wake engine (missing dep, missing model file) must NOT
+    # kill the listener thread -- it degrades to classic text wake,
+    # loudly. Found live in s31: openwakeword's sklearn import crashed
+    # factory() inside the thread and left the app deaf with a healthy
+    # tray icon.
+    def exploding_factory():
+        raise ModuleNotFoundError("No module named 'sklearn'")
+
+    monkeypatch.setattr(listener, "notify", lambda *a, **k: None, raising=False)
+    events = [RecognizerEvent("partial", "computer")]
+    audio = queue.Queue()
+    audio.put(b"chunk0")
+    audio.put(None)
+    monkeypatch.setattr(listener, "_open_pw_record", lambda s: type("P", (), {"kill": lambda self: None})())
+    monkeypatch.setattr(listener, "_start_reader", lambda p: audio)
+    monkeypatch.setattr(listener, "_notify_general", lambda *a, **k: None)
+    monkeypatch.setattr(commands, "get_command_window", lambda: 8)
+    monkeypatch.setattr(commands, "get_overrides", lambda: [])
+    monkeypatch.setattr(commands, "try_match", lambda *a: False)
+
+    context = Context()
+    rec = ScriptedRecognizer(events)
+    listener.run_listener(
+        source="fake",
+        recognizer_factory=lambda: rec,
+        detector=WakeWordDetector(["computer"]),
+        context=context,
+        gui_env={},
+        wake_engine_factory=exploding_factory,
+    )
+    # Text wake still worked: the partial woke the machine.
+    assert context.state == State.LISTENING
+    assert "wake engine failed" in capsys.readouterr().out.lower()

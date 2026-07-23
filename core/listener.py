@@ -250,7 +250,21 @@ def run_listener(
     # lifetime. Streaming backends (vosk) get a whole chain in one final
     # and keep the classic match -> sleep behavior.
     per_segment = getattr(rec, "per_segment_finals", False)
-    wake_engine = wake_engine_factory() if wake_engine_factory is not None else None
+
+    # A broken wake engine (missing dep, missing model file) must never
+    # kill this thread -- that leaves the app deaf behind a healthy tray
+    # icon (s31: openwakeword's sklearn import did exactly that). Degrade
+    # to classic text wake, LOUDLY (always-on toast, same rule as the
+    # placement-failed toast).
+    wake_engine = None
+    if wake_engine_factory is not None:
+        try:
+            wake_engine = wake_engine_factory()
+        except Exception as e:
+            print(f"[listener] Wake engine failed, falling back to text wake: {e}")
+            _notify("Wake engine failed",
+                    "Falling back to transcription-based wake -- check the journal.",
+                    gui_env=gui_env)
 
     print(f"[listener] Listening on: {source}")
 

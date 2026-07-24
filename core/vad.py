@@ -24,7 +24,17 @@ class SileroVAD:
         import onnxruntime as ort
 
         self._np = np
-        self._sess = ort.InferenceSession(model_path)
+        # Single-threaded session: Silero is a ~1ms micro-model, but
+        # onnxruntime's default is an intra-op pool sized to the CPU
+        # whose idle workers BUSY-SPIN between inferences. With an
+        # inference per 125ms chunk the pool never parks -- s33 measured
+        # ~9 cores at 100% while idle in SLEEPING. One thread = no
+        # worker pool = no spinning; latency is unchanged for a model
+        # this small.
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        self._sess = ort.InferenceSession(model_path, sess_options=opts)
         self._h = np.zeros((2, 1, 64), dtype=np.float32)
         self._c = np.zeros((2, 1, 64), dtype=np.float32)
         self._sr = np.array(SAMPLE_RATE, dtype=np.int64)

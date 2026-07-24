@@ -60,7 +60,7 @@ CONFIRM_PHRASES   = {"confirm", "yes", "do it"}
 CANCEL_PHRASES    = {"cancel", "never mind", "abort"}
 
 CONFIRM_WINDOW = 5   # seconds to say "confirm" before the pending command expires
-NOTIFY_DURATION_MS = 2000  # standard duration for all non-transient notifications
+NOTIFY_DURATION_MS = 3000  # standard duration for all non-transient notifications
 
 # Confirmation notification body -- lists all valid confirm/cancel phrases.
 _CONFIRM_BODY = (

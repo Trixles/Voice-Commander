@@ -180,7 +180,7 @@ def matcher_env(monkeypatch):
     # per-segment "No match" notifications.
     monkeypatch.setattr(
         commands, "_notify",
-        lambda summary, body="", timeout_ms=2000, gui_env=None:
+        lambda summary, body="", timeout_ms=3000, gui_env=None:
             notified.append((summary, body)),
     )
 

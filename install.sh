@@ -237,6 +237,12 @@ install_venv() {
     # install without deps; its actual needs (onnxruntime, numpy, tqdm,
     # scipy, requests) come from requirements.txt.
     "${VENV_DIR}/bin/pip" install --quiet --no-deps openwakeword==0.6.0
+    # Named interpreter symlink: the service and launcher exec through
+    # this so the process shows up as "vcw" in ps/System Monitor instead
+    # of an anonymous "python" (the kernel names a process after the
+    # path it was exec'd as; venv detection still works because
+    # pyvenv.cfg is found relative to the symlink's directory).
+    ln -sf python "${VENV_DIR}/bin/vcw"
     ok "Virtual environment ready."
 }
 
@@ -429,7 +435,7 @@ install_service() {
     info "Generating systemd user service file..."
     mkdir -p "${SYSTEMD_USER_DIR}"
     local service_file="${SYSTEMD_USER_DIR}/${APP_NAME}.service"
-    local venv_python="${VENV_DIR}/bin/python"
+    local venv_python="${VENV_DIR}/bin/vcw"
 
     sed -e "s|@VENV_PYTHON@|${venv_python}|g" \
         -e "s|@APP_DIR@|${APP_DIR}|g" \
@@ -454,7 +460,7 @@ install_launcher() {
     cat > "${launcher}" <<EOF
 #!/usr/bin/env bash
 # Voice Commander launcher (installed by install.sh -- do not edit).
-exec "${VENV_DIR}/bin/python" "${APP_DIR}/voice_commander.py" "\$@"
+exec "${VENV_DIR}/bin/vcw" "${APP_DIR}/voice_commander.py" "\$@"
 EOF
     chmod +x "${launcher}"
     ok "Launcher installed."

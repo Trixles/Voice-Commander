@@ -624,6 +624,18 @@ def get_wake_threshold() -> float:
     return float(_config.get("wake_threshold", 0.5))
 
 
+def get_wake_vad_threshold() -> float:
+    """Speech gate for the audio wake engine (0 = off).
+
+    openWakeWord can require its bundled Silero VAD to have detected
+    speech in the ~0.4-0.56s before a frame, or the frame's score is
+    forced to 0. s33 measured why this matters: BOTH wake models
+    false-fired several times an hour on non-speech transients
+    (keyboard clicks, sighs, room noise) while leaving genuine
+    "computer" scores untouched -- exactly what this gate filters."""
+    return float(_config.get("wake_vad_threshold", 0.5))
+
+
 def get_vosk_model_path() -> str:
     """
     Return the absolute path to the Vosk model directory.
@@ -1448,6 +1460,7 @@ if __name__ == "__main__":
             "wake_engine": "text",
             "wake_model": "computer_v2",
             "wake_threshold": 0.5,
+            "wake_vad_threshold": 0.5,
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],

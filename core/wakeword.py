@@ -23,11 +23,19 @@ import core.commands as commands
 _OWW_FRAME_SAMPLES = 1280
 
 
-def _load_oww_model(model_path: str):
-    """Build the openwakeword Model (separated for test injection)."""
+def _load_oww_model(model_path: str, vad_threshold: float = 0.0):
+    """Build the openwakeword Model (separated for test injection).
+
+    vad_threshold > 0 turns on oww's bundled Silero speech gate: a
+    frame's score is forced to 0 unless the VAD saw speech just before
+    it. Its onnxruntime session is explicitly 1-thread upstream, so it
+    can't reintroduce the s33 spin-pool CPU burn."""
     from openwakeword.model import Model  # deferred import
 
-    return Model(wakeword_models=[model_path], inference_framework="onnx")
+    kwargs = {"wakeword_models": [model_path], "inference_framework": "onnx"}
+    if vad_threshold > 0:
+        kwargs["vad_threshold"] = vad_threshold
+    return Model(**kwargs)
 
 
 class OpenWakeWordEngine:
@@ -40,6 +48,10 @@ class OpenWakeWordEngine:
         self._model = model
         self._threshold = threshold
         self._buffer = np.array([], dtype=np.int16)
+        # Score of the frame that fired, for the log line. Debugging the
+        # s33 false fires was blind without it: "wake detected" alone
+        # can't distinguish a confident hit from a threshold squeaker.
+        self.last_score = 0.0
 
     def feed(self, data: bytes) -> bool:
         """Returns True when the wake word fired in this chunk's frames."""
@@ -54,13 +66,17 @@ class OpenWakeWordEngine:
                 self._buffer[_OWW_FRAME_SAMPLES:],
             )
             scores = self._model.predict(frame)
-            if max(scores.values()) >= self._threshold:
+            top = max(scores.values())
+            if top >= self._threshold:
                 fired = True
+                self.last_score = max(self.last_score, float(top))
         if fired:
             # Drop the rolling audio state so the hot window can't re-fire
             # the instant the listener returns to SLEEPING.
             self._model.reset()
             self._buffer = np.array([], dtype=np.int16)
+        else:
+            self.last_score = 0.0
         return fired
 
 
@@ -73,10 +89,12 @@ def make_wake_engine_factory():
 
     model_path = commands.get_wake_model_path()
     threshold = commands.get_wake_threshold()
+    vad_threshold = commands.get_wake_vad_threshold()
 
     def factory():
         return OpenWakeWordEngine(
-            model=_load_oww_model(model_path), threshold=threshold
+            model=_load_oww_model(model_path, vad_threshold),
+            threshold=threshold,
         )
 
     return factory

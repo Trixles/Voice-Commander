@@ -362,8 +362,13 @@ def run_listener(
             if wake_engine.feed(data):
                 command_window = commands.get_command_window()
                 matched_since_wake = False
-                print("[listener] Wake word detected (audio engine).")
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
+                # The score goes in both logs: a false fire and a genuine
+                # wake look identical without it (s33 spent a day blind).
+                score = getattr(wake_engine, "last_score", 0.0)
+                print(f"[listener] Wake word detected (audio engine, score {score:.3f}).")
+                LOG_BUFFER.append(
+                    f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected ({score:.2f})"
+                )
                 _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
                 set_state(State.LISTENING)
                 command_window_start = now

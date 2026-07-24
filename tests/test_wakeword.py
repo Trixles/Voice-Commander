@@ -117,8 +117,9 @@ def test_factory_builds_engine_from_config(monkeypatch):
     }
     built = {}
 
-    def fake_load(model_path):
+    def fake_load(model_path, vad_threshold=0.0):
         built["path"] = model_path
+        built["vad"] = vad_threshold
         return FakeOwwModel(scores=[0.0])
 
     monkeypatch.setattr(wakeword, "_load_oww_model", fake_load)
@@ -126,4 +127,33 @@ def test_factory_builds_engine_from_config(monkeypatch):
     eng = factory()
     assert built["path"].endswith("wakewords/computer_v2.onnx")
     assert eng._threshold == 0.8
+    assert built["vad"] == 0.5  # speech gate on by default
     assert eng.feed(b"\x00" * 2560) is False  # wired and callable
+
+
+def test_wake_vad_threshold_config():
+    # The speech gate that killed the s33 non-speech false fires
+    # (keyboard clicks, sighs). 0 disables it.
+    commands._config = {}
+    assert commands.get_wake_vad_threshold() == 0.5
+    commands._config = {"wake_vad_threshold": 0}
+    assert commands.get_wake_vad_threshold() == 0
+
+
+def test_fire_records_score_for_logging():
+    # Without the score, a false fire and a genuine wake are
+    # indistinguishable in the logs -- s33 debugged blind for a day.
+    # 2560 bytes = 1280 int16 samples = exactly one oww frame.
+    fake = FakeOwwModel(scores=[0.1, 0.83])
+    eng = wakeword.OpenWakeWordEngine(model=fake, threshold=0.5)
+    assert eng.feed(b"\x00" * 5120) is True     # two frames: 0.1 then 0.83
+    assert eng.last_score == pytest.approx(0.83)
+
+
+def test_score_clears_when_no_fire():
+    fake = FakeOwwModel(scores=[0.9, 0.1, 0.1])
+    eng = wakeword.OpenWakeWordEngine(model=fake, threshold=0.5)
+    eng.feed(b"\x00" * 2560)                    # one frame: 0.9 fires
+    assert eng.last_score == pytest.approx(0.9)
+    eng.feed(b"\x00" * 5120)                    # two quiet frames
+    assert eng.last_score == 0.0                # stale score not reused

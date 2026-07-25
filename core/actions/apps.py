@@ -117,10 +117,12 @@ def launch_app(app: str, gui_env: dict, context=None) -> None:
 
 def open_file(path: str, gui_env: dict, context=None) -> None:
     """
-    Open an arbitrary file or executable via xdg-open.
-    Works for .desktop files, scripts, binaries, documents -- anything
-    xdg-open knows how to handle. The user picks the path via the
-    settings UI file browser; we just run it.
+    Open an arbitrary file, folder, or executable via xdg-open.
+    Works for .desktop files, scripts, binaries, documents, and
+    directories (xdg-open hands a folder to the file manager) --
+    anything xdg-open knows how to handle. The user picks the path via
+    the settings UI, which offers a file chooser and a folder chooser
+    writing to this same arg; we just run it.
     """
     if not path or not path.strip():
         print("[apps] open_file: empty path, skipping")
@@ -132,8 +134,8 @@ def open_file(path: str, gui_env: dict, context=None) -> None:
         # toggle; this error toast is general feedback and respects it.
         from core.commands import notifications_enabled
         if notifications_enabled():
-            notify("File not found", f"Path does not exist:\n{path}",
-                   timeout_ms=3000, gui_env=gui_env)
+            notify("Not found", f"Path does not exist:\n{path}",
+                   gui_env=gui_env)
         return
     run_bg(["xdg-open", path], env=gui_env, detach=True)
     if context:

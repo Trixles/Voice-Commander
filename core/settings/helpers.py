@@ -30,6 +30,11 @@ URL_ACTION_KEY   = "open_url"
 APP_ACTION_KEY   = "launch_app"
 FILE_ACTION_KEY  = "open_file"
 
+# Placeholder shown in the open_file row when no path is set. It doubles as
+# the "unset" sentinel the row compares against, so it must be defined once
+# -- four hand-copied literals is how a label edit silently breaks saving.
+NO_PATH_TEXT = "No file or folder selected"
+
 # Actions where the user controls the command name.
 # These are the only actions shown in the action dropdown.
 _USER_ACTIONS = {APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY}
@@ -58,7 +63,7 @@ _PINNED_SLOT_NAMES = {p["name"] for p in _PINNED_SLOT}
 _ACTION_LABELS = {
     APP_ACTION_KEY:            "Launch app",
     URL_ACTION_KEY:            "Open URL",
-    FILE_ACTION_KEY:           "Open file",
+    FILE_ACTION_KEY:           "Open file or folder",
     SHELL_ACTION_KEY:          "Run shell command",
     "volume_up":               "Volume up",
     "volume_down":             "Volume down",

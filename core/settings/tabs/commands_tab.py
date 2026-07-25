@@ -41,7 +41,7 @@ from core.commands import (
 )
 from core.env import blur_compositing_available
 from core.settings.helpers import (
-    APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY,
+    APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY, NO_PATH_TEXT,
     _ACTION_LABELS, _CONFIRM_ACTIONS, _CONFIRM_NOTE, _HIDDEN_COMMANDS,
     _PINNED_SLOT_NAMES, _SELECTABLE_ACTIONS, ToggleSwitch,
     _centered_rule, _display_name_from_action, _display_name_from_slug, _h_rule,
@@ -434,19 +434,29 @@ class CommandRow(QWidget):
         bl.addWidget(self._url_widget)
 
         # open_file arg widget
+        # open_file arg widget. TWO browse buttons feeding one 'path' arg:
+        # Qt's file and directory choosers are separate dialogs
+        # (getOpenFileName can't select a folder, getExistingDirectory can't
+        # select a file), so offering both is the only way to cover the
+        # combined action. The action itself has always handled folders --
+        # xdg-open on a directory opens the file manager.
         self._file_widget = QWidget()
         file_h = QHBoxLayout(self._file_widget)
         file_h.setContentsMargins(0, 0, 0, 0)
         file_h.setSpacing(6)
-        self._file_label = QLabel("No file selected")
+        self._file_label = QLabel(NO_PATH_TEXT)
         self._file_label.setStyleSheet("font-size: 9pt; color: #888;")
         self._file_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._file_browse_btn = QPushButton("Browse...")
-        self._file_browse_btn.setFixedWidth(80)
+        self._file_browse_btn = QPushButton("File...")
+        self._file_browse_btn.setFixedWidth(70)
         self._file_browse_btn.clicked.connect(self._browse_file)
-        file_h.addWidget(QLabel("File:"))
+        self._folder_browse_btn = QPushButton("Folder...")
+        self._folder_browse_btn.setFixedWidth(80)
+        self._folder_browse_btn.clicked.connect(self._browse_folder)
+        file_h.addWidget(QLabel("Path:"))
         file_h.addWidget(self._file_label)
         file_h.addWidget(self._file_browse_btn)
+        file_h.addWidget(self._folder_browse_btn)
         bl.addWidget(self._file_widget)
 
         # run_command arg widget
@@ -524,7 +534,7 @@ class CommandRow(QWidget):
             self._url_edit.setText(args.get("url", ""))
             browser = args.get("browser", "")
             self._browser_label.setText(browser if browser else "System default")
-            self._file_label.setText(args.get("path", "") or "No file selected")
+            self._file_label.setText(args.get("path", "") or NO_PATH_TEXT)
             self._shell_edit.setText(args.get("command", ""))
 
             self._update_arg_visibility(action_key)
@@ -547,7 +557,7 @@ class CommandRow(QWidget):
         self._stash["app"]     = self._app_label.text() if self._app_label.text() != "No app selected" else ""
         self._stash["url"]     = self._url_edit.text()
         self._stash["browser"] = self._browser_label.text() if self._browser_label.text() != "System default" else ""
-        self._stash["path"]    = self._file_label.text() if self._file_label.text() != "No file selected" else ""
+        self._stash["path"]    = self._file_label.text() if self._file_label.text() != NO_PATH_TEXT else ""
         self._stash["command"] = self._shell_edit.text()
 
         # Stash the user-typed name if we were on an open-type action.
@@ -573,7 +583,7 @@ class CommandRow(QWidget):
             self._browser_label.setText(val if val else "System default")
         elif new_key == FILE_ACTION_KEY:
             val = self._stash.get("path", "")
-            self._file_label.setText(val if val else "No file selected")
+            self._file_label.setText(val if val else NO_PATH_TEXT)
         elif new_key == SHELL_ACTION_KEY:
             self._shell_edit.setText(self._stash.get("command", ""))
 
@@ -657,14 +667,24 @@ class CommandRow(QWidget):
         if was_set:
             self._emit_dirty()
 
-    def _browse_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Choose file", os.path.expanduser("~")
-        )
+    def _set_path(self, path: str) -> None:
+        """Shared by both browse buttons -- one 'path' arg, two dialogs."""
         if path:
             self._file_label.setText(path)
             self._stash["path"] = path
             self._emit_dirty()
+
+    def _browse_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose file", os.path.expanduser("~")
+        )
+        self._set_path(path)
+
+    def _browse_folder(self) -> None:
+        self._set_path(QFileDialog.getExistingDirectory(
+            self, "Choose folder", os.path.expanduser("~"),
+            QFileDialog.Option.ShowDirsOnly,
+        ))
 
     def _on_delete(self) -> None:
         p = self.parent()
@@ -695,7 +715,7 @@ class CommandRow(QWidget):
                 args["browser"] = browser
         elif action_key == FILE_ACTION_KEY:
             path = self._file_label.text()
-            if path and path != "No file selected":
+            if path and path != NO_PATH_TEXT:
                 args["path"] = path
         elif action_key == SHELL_ACTION_KEY:
             cmd_str = self._shell_edit.text().strip()

@@ -30,10 +30,9 @@ import queue
 import subprocess
 import threading
 import time
-from datetime import datetime
 
 from core.context import Context, State
-from core.log_buffer import LOG_BUFFER
+from core.log_buffer import log
 from core.notify import notify as _notify
 from core.recognizer import SAMPLE_RATE
 from core.run import get_default_source
@@ -60,7 +59,6 @@ CONFIRM_PHRASES   = {"confirm", "yes", "do it"}
 CANCEL_PHRASES    = {"cancel", "never mind", "abort"}
 
 CONFIRM_WINDOW = 5   # seconds to say "confirm" before the pending command expires
-NOTIFY_DURATION_MS = 3000  # standard duration for all non-transient notifications
 
 # Confirmation notification body -- lists all valid confirm/cancel phrases.
 _CONFIRM_BODY = (
@@ -237,7 +235,7 @@ def run_listener(
         set_state(State.CONFIRMING)
         title = _confirm_title(context.pending_confirm)
         _notify(title, _CONFIRM_BODY, timeout_ms=CONFIRM_WINDOW * 1000, gui_env=gui_env)
-        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  {title}")
+        log(title)
         print(f"[listener] -> CONFIRMING ({context.pending_confirm.get('name')})")
 
     rec  = recognizer_factory()
@@ -304,15 +302,15 @@ def run_listener(
                     set_state(State.SLEEPING)
                 else:
                     print("[listener] Command window expired, back to sleep.")
-                    _notify_general("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match (window expired)")
+                    _notify_general("No match", gui_env=gui_env)
+                    log("No match (window expired)")
                     set_state(State.SLEEPING)
 
         elif context.state == State.CONFIRMING:
             if now - confirm_start > CONFIRM_WINDOW:
                 print(f"[listener] Confirmation window expired, restoring {pre_confirm_state.value}.")
                 _notify("Cancelled", "Confirmation timed out.", gui_env=gui_env)
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Confirmation timed out")
+                log("Confirmation timed out")
                 context.pending_confirm = None
                 context.pending_args    = None
                 set_state(pre_confirm_state)
@@ -339,12 +337,12 @@ def run_listener(
                             set_state(State.SLEEPING)
                             _notify_general("Open mic disabled", "Waiting for wake word.", gui_env=gui_env)
                             print("[listener] Open mic toggled off via tray.")
-                            LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Open mic disabled")
+                            log("Open mic disabled")
                         elif context.state == State.SLEEPING:
                             set_state(State.OPEN_MIC)
                             _notify_general("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
                             print("[listener] Open mic toggled on via tray.")
-                            LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Open mic enabled")
+                            log("Open mic enabled")
                     elif cmd == "quit":
                         print("[listener] Quit command received, stopping.")
                         proc.kill()
@@ -368,7 +366,7 @@ def run_listener(
                 # stays identical to the other two wake paths below.
                 score = getattr(wake_engine, "last_score", 0.0)
                 print(f"[listener] Wake word detected (audio engine, score {score:.3f}).")
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
+                log("Wake word detected")
                 _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
                 set_state(State.LISTENING)
                 command_window_start = now
@@ -417,7 +415,7 @@ def run_listener(
                     command_window = commands.get_command_window()
                     matched_since_wake = False
                     print("[listener] Wake word detected (partial).")
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
+                    log("Wake word detected")
                     _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
                     set_state(State.LISTENING)
                     command_window_start = now
@@ -441,7 +439,7 @@ def run_listener(
         text = _normalize(text)
         text = overrides.apply_overrides(text, commands.get_overrides())
         print(f"[listener] Heard ({context.state.value}): {text}")
-        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  [{context.state.value}]  {text}")
+        log(f"[{context.state.value}]  {text}")
 
         # -- State machine ----------------------------------------------------
 
@@ -450,7 +448,7 @@ def run_listener(
                 continue
 
             print("[listener] Wake word detected.")
-            LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Wake word detected")
+            log("Wake word detected")
             _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
             if commands.try_match(text, gui_env, context):
                 if context.pending_confirm:
@@ -488,7 +486,7 @@ def run_listener(
                 set_state(State.OPEN_MIC)
                 _notify_general("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
                 print("[listener] -> OPEN_MIC")
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Open mic enabled")
+                log("Open mic enabled")
                 continue
 
             if commands.try_match(text, gui_env, context):
@@ -511,22 +509,26 @@ def run_listener(
                 # sleep instead of lingering in LISTENING, which would let the
                 # command-window-expiry path fire a SECOND "No match". Re-waking
                 # is instant now (wake acknowledges off a partial).
+                # Show WHAT was heard, same as the per-segment chain toast in
+                # commands._notify_nomatch. Without it the user only learns
+                # that something failed, not which mishearing to write an
+                # override for -- and the two paths read inconsistently.
                 print("[listener] No match, back to sleep.")
-                _notify_general("No match", timeout_ms=NOTIFY_DURATION_MS, gui_env=gui_env)
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match")
+                _notify_general("No match", f"'{text}'", gui_env=gui_env)
+                log(f"No match: '{text}'")
                 set_state(State.SLEEPING)
 
         elif context.state == State.CONFIRMING:
             if _is_cancel(text):
                 print(f"[listener] Cancelled, restoring {pre_confirm_state.value}.")
                 _notify("Cancelled", gui_env=gui_env)
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Cancelled")
+                log("Cancelled")
                 context.pending_confirm = None
                 context.pending_args    = None
                 set_state(pre_confirm_state)
             elif _is_confirm(text):
                 print("[listener] Confirmed -- executing.")
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Confirmed")
+                log("Confirmed")
                 commands.dispatch_confirmed(gui_env, context)
                 set_state(State.SLEEPING)
             else:
@@ -537,7 +539,7 @@ def run_listener(
                 set_state(State.SLEEPING)
                 _notify_general("Open mic disabled", "Waiting for wake word.", gui_env=gui_env)
                 print("[listener] -> SLEEPING")
-                LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Open mic disabled")
+                log("Open mic disabled")
                 continue
 
             if commands.try_match(text, gui_env, context):

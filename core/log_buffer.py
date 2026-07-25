@@ -12,7 +12,7 @@ commands.py needs to write to it, but it used to live in listener.py
 which imports commands. The fix was eight function-scope
 `from core.listener import LOG_BUFFER` lines inside commands.py to
 defer the import past module load. With the buffer here, both modules
-just `from core.log_buffer import LOG_BUFFER` at top of file.
+just `from core.log_buffer import log` at top of file.
 
 # Quirks (preserved from ARCHITECTURE.md > LOG_BUFFER quirks)
 # - _poll_log() in settings.py compares tuple(LOG_BUFFER) snapshots
@@ -25,8 +25,20 @@ just `from core.log_buffer import LOG_BUFFER` at top of file.
 """
 
 from collections import deque
+from datetime import datetime
 
 
 # Capped at 200 to bound memory. Lines are timestamped strings appended
 # by the listener and dispatcher.
 LOG_BUFFER: deque[str] = deque(maxlen=200)
+
+
+def log(message: str) -> None:
+    """Append a timestamped line to the Settings Log tab.
+
+    The one place the log's timestamp format is defined. Callers used to
+    inline `f"{datetime.now().strftime('%H:%M:%S')}  ..."` at 25 sites
+    across listener.py and commands.py, which is how the audio-wake line
+    drifted out of sync with the two text-wake lines.
+    """
+    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  {message}")

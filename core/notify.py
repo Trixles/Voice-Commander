@@ -4,10 +4,11 @@ core/notify.py
 Single notify-send wrapper. Replaces the two former _notify() copies
 in commands.py and listener.py.
 
-Default timeout is 3000ms to match the documented 'standard duration'
-constant (listener.NOTIFY_DURATION_MS). Callers that want longer
-notifications (e.g. the confirm window in listener.py) pass an
-explicit timeout_ms.
+The 3000ms default IS the standard duration -- this is its single
+definition. Only callers whose toast must outlive it pass an explicit
+timeout_ms, and both of them tie the value to a real window they
+represent ("Listening..." to command_window, the confirm prompt to
+CONFIRM_WINDOW) rather than picking a number.
 
 Note that --expire-time is only a HINT under the freedesktop spec:
 Plasma's notification service may override it or keep undismissed

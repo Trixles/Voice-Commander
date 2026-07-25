@@ -29,13 +29,12 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
 from typing import Any
 
 from core.actions import apps, system, windows
 from core.aliases import PINNED_SLOT, default_aliases as _default_aliases
 from core.desktop import extract_exec_token
-from core.log_buffer import LOG_BUFFER
+from core.log_buffer import log
 from core.matcher import (
     TAIL_THRESHOLD,
     _extract_slots,
@@ -1067,18 +1066,14 @@ def _match_chain_segments(
         _score, cmd, args, target = result
         if cmd.get("confirm"):
             print(f"[commands] Chain aborted: '{cmd['name']}' requires confirmation")
-            LOG_BUFFER.append(
-                f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' requires confirmation"
-            )
+            log(f"!! Chain aborted: '{cmd['name']}' requires confirmation")
             return matches, False, True
         cooldown = cmd.get("cooldown", DEFAULT_COOLDOWN)
         if cooldown > 0:
             last = _last_fired.get(cmd["name"], 0.0)
             if time.time() - last < cooldown:
                 print(f"[commands] Chain aborted: '{cmd['name']}' on cooldown")
-                LOG_BUFFER.append(
-                    f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: '{cmd['name']}' on cooldown"
-                )
+                log(f"!! Chain aborted: '{cmd['name']}' on cooldown")
                 return matches, False, True
         matches.append((cmd, args, target))
     # chain_ok = "at least one segment actually matched" (enabled or disabled).
@@ -1191,7 +1186,7 @@ def _dispatch(cmd: dict, resolved_args: dict, gui_env: dict, context) -> None:
         print(f"[commands] {msg}")
         if notifications_enabled():
             _notify("Command not configured", msg, gui_env=gui_env)
-        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! {msg}")
+        log(f"!! {msg}")
         return
 
     merged["gui_env"] = gui_env
@@ -1209,7 +1204,7 @@ def _dispatch(cmd: dict, resolved_args: dict, gui_env: dict, context) -> None:
     if notifications_enabled():
         _notify(summary, gui_env=gui_env)
 
-    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  >> {summary}")
+    log(f">> {summary}")
 
     if context:
         context.update(last_command_name=cmd["name"])
@@ -1228,7 +1223,7 @@ def _dispatch_with_monitor(cmd: dict, args: dict, target_output: str | None,
         entry = f"{target_output}:{_wm_class_hint(cmd)}"
         windows.write_next_screen(entry, gui_env)
         time.sleep(0.3)
-        LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target_output}")
+        log(f"Target monitor: {target_output}")
 
     _dispatch(cmd, args, gui_env, context)
 
@@ -1240,7 +1235,7 @@ def _notify_disabled(cmd: dict, gui_env: dict) -> None:
     display = cmd.get("display_name") or cmd.get("name")
     msg = f"{display} is disabled in Settings"
     print(f"[commands] {msg}")
-    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! {msg}")
+    log(f"!! {msg}")
     if notifications_enabled():
         _notify(msg, gui_env=gui_env)
 
@@ -1252,7 +1247,7 @@ def _notify_nomatch(seg: str, gui_env: dict) -> None:
     without reading the log -- e.g. "open it on monitor one and open dolphin"
     fires Dolphin and toasts "'open it on monitor one' No match"."""
     print(f"[commands] Chain segment no match: '{seg}'")
-    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  No match: '{seg}'")
+    log(f"No match: '{seg}'")
     if notifications_enabled():
         _notify("No match", f"'{seg}'", gui_env=gui_env)
 
@@ -1339,7 +1334,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                         (cmd, args, last_target) for cmd, args, _ in active[:-1]
                     ] + [active[-1]]
                     print(f"[commands] Trailing target '{last_target}' propagated to {len(active) - 1} prior segment(s)")
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Trailing target propagated: all segments -> {last_target}")
+                    log(f"Trailing target propagated: all segments -> {last_target}")
 
             # Two-or-more open_url commands targeting DIFFERENT monitors race in
             # ways we can't fix (the browser may reuse an existing window, open
@@ -1353,7 +1348,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
                 url_targets = [target for cmd, _, target in active if cmd["action"] == "open_url"]
                 if len(url_targets) >= 2 and len(set(url_targets)) > 1:
                     print("[commands] Chain aborted: multiple open_url commands targeting different monitors")
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  !! Chain aborted: multiple URLs targeting different monitors")
+                    log("!! Chain aborted: multiple URLs targeting different monitors")
                     chain_ok = False
                     chain_rejected = True
 
@@ -1377,7 +1372,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
 
                 if active:
                     print(f"[commands] Chained {len(active)} commands")
-                    LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Chaining {len(active)} commands")
+                    log(f"Chaining {len(active)} commands")
 
                     # Build a queue of "output:wm_class" entries so the KWin
                     # placer can match each arriving window to the correct
@@ -1393,7 +1388,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
 
                     for cmd, args, target in active:
                         if target:
-                            LOG_BUFFER.append(f"{datetime.now().strftime('%H:%M:%S')}  Target monitor: {target}")
+                            log(f"Target monitor: {target}")
                         print(f"[commands] Best match: '{cmd['name']}'")
                         _dispatch(cmd, args, gui_env, context)
 

@@ -128,8 +128,12 @@ decision 3 rejects. So `make_wake_engine_factory()` handles it:
   message string) on the returned engine. `OpenWakeWordEngine` gains
   that attribute, defaulting to `None`.
 - The listener reads `verifier_error` after constructing the engine and
-  fires a persistent notification via its existing `_notify_general`
-  path, wording the fix: retrain the verifier.
+  fires a notification via `_notify`, wording the fix: retrain the
+  verifier. **`_notify`, not `_notify_general`** — the latter is gated
+  by the Options-tab notifications toggle (`core/listener.py:44`), which
+  would let "your wake word is unprotected" be silently suppressed. The
+  existing wake-engine-failure toast three lines away uses bare
+  `_notify` for the same reason.
 
 This keeps `core/wakeword.py` a pure engine module with no notification
 plumbing, and reserves the text-wake degrade for a genuinely dead
@@ -140,12 +144,18 @@ engine (missing dependency, missing `.onnx`).
 `last_score` becomes the verifier's probability whenever a verifier is
 active, so a verified genuine wake logs ~0.68–0.95 where it previously
 logged ~0.99. Unmarked, that reads in the journal as the wake model
-getting worse. The listener's log line distinguishes them:
+getting worse. The tag goes on the **journal `print()` line that already
+carries the score**:
 
 ```
-[listener] -> LISTENING (audio wake, verified 0.82)
-[listener] -> LISTENING (audio wake, 0.99)
+[listener] Wake word detected (audio engine, verified score 0.820).
+[listener] Wake word detected (audio engine, score 0.990).
 ```
+
+It does **not** go into `log()`. The user-facing Settings log carries no
+score by deliberate decision (commit 66b8214, "keep the wake score out
+of the user-facing log") — it is journal-only diagnostics, and the
+verified tag is more of the same.
 
 ### Artifact durability
 

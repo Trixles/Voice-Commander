@@ -52,6 +52,25 @@ def test_wake_model_path_and_threshold():
     assert commands.get_wake_threshold() == 0.5
 
 
+def test_wake_verifier_defaults_to_off():
+    # Shipped default is no verifier: a fresh install behaves exactly as
+    # it did before this feature existed.
+    commands._config = {}
+    assert commands.get_wake_verifier_path() is None
+
+
+def test_wake_verifier_blank_string_is_off():
+    commands._config = {"wake_verifier": "   "}
+    assert commands.get_wake_verifier_path() is None
+
+
+def test_wake_verifier_path_resolves_stem_to_pkl():
+    commands._config = {"wake_verifier": "computer_v2_verifier"}
+    assert commands.get_wake_verifier_path() == os.path.join(
+        paths.DATA_DIR, "wakewords", "computer_v2_verifier.pkl"
+    )
+
+
 class FakeOwwModel:
     """Mimics openwakeword.Model: predict(np_chunk) -> {name: score}."""
 

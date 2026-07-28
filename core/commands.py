@@ -635,6 +635,21 @@ def get_wake_vad_threshold() -> float:
     return float(_config.get("wake_vad_threshold", 0.5))
 
 
+def get_wake_verifier_path() -> str | None:
+    """Speaker verifier for the audio wake engine: a second-stage
+    classifier that re-scores any frame the base model would fire on,
+    answering "is this the enrolled speaker saying the wake word?".
+
+    It is a VOICEPRINT -- trained locally per user
+    (benchmark/train_v2_verifier.py), so it is user data and ships with
+    nothing. Empty (the shipped default) = off. Same drop-in directory
+    as the .onnx wake models; 'wake_verifier' is the file stem."""
+    name = str(_config.get("wake_verifier", "")).strip()
+    if not name:
+        return None
+    return os.path.join(paths.DATA_DIR, "wakewords", f"{name}.pkl")
+
+
 def get_vosk_model_path() -> str:
     """
     Return the absolute path to the Vosk model directory.
@@ -1456,6 +1471,7 @@ if __name__ == "__main__":
             "wake_model": "computer_v2",
             "wake_threshold": 0.5,
             "wake_vad_threshold": 0.5,
+            "wake_verifier": "",
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],

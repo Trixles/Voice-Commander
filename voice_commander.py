@@ -20,12 +20,18 @@ import threading
 import time
 
 from core import __version__
+from core.paths import APP_NAME
+
+# Log prefix and --version banner both derive from the install identity;
+# tests/test_install_identity.py fails the build if the name is written
+# as a literal anywhere outside core/paths.py.
+_TAG = f"[{APP_NAME}]"
 
 
 # Handle --version BEFORE importing Qt/Vosk so `voice-commander --version`
 # returns instantly without loading the GUI stack or the speech model.
 if __name__ == "__main__" and len(sys.argv) == 2 and sys.argv[1] in ("--version", "-V"):
-    print(f"voice-commander-whisper {__version__}")
+    print(f"{APP_NAME} {__version__}")
     sys.exit(0)
 
 # --activate is the app-menu path (the .desktop Exec line carries it): tell a
@@ -102,7 +108,7 @@ def _acquire_single_instance() -> QLocalServer | None:
         # Couldn't listen for some unexpected reason. Fail OPEN: the guard is a
         # footgun-killer, not a security control, so don't block a real launch.
         print(
-            f"[voice-commander-whisper] WARNING: single-instance lock unavailable: "
+            f"{_TAG} WARNING: single-instance lock unavailable: "
             f"{server.errorString()}",
             file=sys.stderr,
         )
@@ -127,7 +133,7 @@ def _listener_thread(
     first_run = True
     while True:
         source = get_default_source()
-        print(f"[voice-commander-whisper] Default source: {source}")
+        print(f"{_TAG} Default source: {source}")
 
         # On mic change (not first run), hold the error icon briefly so the
         # user sees a visible flicker indicating something changed.
@@ -139,7 +145,7 @@ def _listener_thread(
         state_queue.put(State.ERROR)
 
         if not wait_for_mic_ready(source, timeout=10):
-            print("[voice-commander-whisper] Mic not ready, retrying in 5s...")
+            print(f"{_TAG} Mic not ready, retrying in 5s...")
             time.sleep(5)
             continue
 
@@ -159,7 +165,7 @@ def _listener_thread(
 
 
 def main() -> None:
-    print("[voice-commander-whisper] Starting up.")
+    print(f"{_TAG} Starting up.")
 
     # Qt app must exist before the single-instance probe (QLocalSocket needs
     # the event dispatcher). Run the guard FIRST -- before the costly config
@@ -172,7 +178,7 @@ def main() -> None:
     singleton = _acquire_single_instance()  # keep ref alive: holds the lock
     if singleton is None:
         print(
-            "[voice-commander-whisper] Already running (another instance holds the "
+            f"{_TAG} Already running (another instance holds the "
             "lock); exiting."
         )
         sys.exit(0)
@@ -182,7 +188,7 @@ def main() -> None:
     except commands.ConfigError as e:
         # Config file exists but is corrupt JSON. Exit loudly rather than
         # regenerate -- overwriting would destroy the user's custom commands.
-        print(f"[voice-commander-whisper] ERROR: {e}", file=sys.stderr)
+        print(f"{_TAG} ERROR: {e}", file=sys.stderr)
         sys.exit(1)
     refresh_monitor_map(GUI_ENV)
     commands.seed_monitor_defaults()
@@ -203,22 +209,22 @@ def main() -> None:
     # configured backend (Vosk model load, or whisper-server unit spin-up)
     # and returns the cheap per-mic-restart factory.
     backend = commands.get_recognizer_backend()
-    print(f"[voice-commander-whisper] Recognizer backend: {backend}")
+    print(f"{_TAG} Recognizer backend: {backend}")
     try:
         recognizer_factory = make_recognizer_factory()
     except Exception as e:
-        print(f"[voice-commander-whisper] ERROR: Failed to set up {backend} backend: {e}", file=sys.stderr)
+        print(f"{_TAG} ERROR: Failed to set up {backend} backend: {e}", file=sys.stderr)
         sys.exit(1)
-    print("[voice-commander-whisper] Recognizer ready.")
+    print(f"{_TAG} Recognizer ready.")
 
     # Audio wake engine (None for wake_engine=text -> classic behavior).
     try:
         wake_engine_factory = make_wake_engine_factory()
     except Exception as e:
-        print(f"[voice-commander-whisper] ERROR: Failed to set up wake engine: {e}", file=sys.stderr)
+        print(f"{_TAG} ERROR: Failed to set up wake engine: {e}", file=sys.stderr)
         sys.exit(1)
     if wake_engine_factory is not None:
-        print("[voice-commander-whisper] Audio wake engine: openwakeword")
+        print(f"{_TAG} Audio wake engine: openwakeword")
 
     state_queue   = queue.Queue()
     command_queue = queue.Queue()

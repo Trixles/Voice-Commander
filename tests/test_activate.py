@@ -28,6 +28,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from core import activate  # noqa: E402
+import core.paths as paths  # noqa: E402
 
 # Same lazy singleton pattern as the other Qt tests. Must be the full GUI
 # QApplication, NOT QCoreApplication: tests share one process, and a bare
@@ -88,7 +89,7 @@ def test_activate_starts_service_when_not_running(monkeypatch):
     rc = activate.activate(name=_TEST_SOCKET)
 
     assert rc == 0
-    assert calls == [["systemctl", "--user", "start", "voice-commander-whisper.service"]]
+    assert calls == [["systemctl", "--user", "start", paths.SERVICE_NAME]]
 
 
 def test_activate_does_not_start_service_when_running(monkeypatch):

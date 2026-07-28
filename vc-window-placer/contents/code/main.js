@@ -44,7 +44,7 @@ if (raw) {
         };
     }).filter(function(e) { return e.output; });
 }
-print("[vcw-window-placer] Queue loaded: " + JSON.stringify(_queue));
+print("[vc-window-placer] Queue loaded: " + JSON.stringify(_queue));
 
 // One-shot: move the CURRENTLY ACTIVE window to a named output. Voice Commander
 // writes [Script-vc-window-placer] moveActive=<output> and reloads this script;
@@ -59,11 +59,11 @@ if (moveActive) {
         return screen.name === moveActive;
     });
     if (active && dest) {
-        print("[vcw-window-placer] moveActive: '" + active.caption +
+        print("[vc-window-placer] moveActive: '" + active.caption +
               "' -> " + moveActive);
         workspace.sendClientToScreen(active, dest);
     } else {
-        print("[vcw-window-placer] moveActive='" + moveActive + "' ignored: " +
+        print("[vc-window-placer] moveActive='" + moveActive + "' ignored: " +
               (active ? "no screen named that" : "no active window"));
     }
 }
@@ -103,14 +103,14 @@ if (typeof _handlerRegistered === "undefined") {
         }
 
         if (matchIdx === -1) {
-            print("[vcw-window-placer] windowAdded: '" + window.caption +
+            print("[vc-window-placer] windowAdded: '" + window.caption +
                   "' resourceClass='" + cls +
                   "' -- no queue entry matched, ignoring");
             return;
         }
 
         var entry = _queue.splice(matchIdx, 1)[0];
-        print("[vcw-window-placer] windowAdded: '" + window.caption +
+        print("[vc-window-placer] windowAdded: '" + window.caption +
               "' resourceClass='" + cls +
               "' matched tag='" + entry.tag +
               "' -> placing on " + entry.output +
@@ -121,7 +121,7 @@ if (typeof _handlerRegistered === "undefined") {
         });
 
         if (!target) {
-            print("[vcw-window-placer] No screen found with name: " + entry.output);
+            print("[vc-window-placer] No screen found with name: " + entry.output);
             return;
         }
 
@@ -156,7 +156,7 @@ if (typeof _handlerRegistered === "undefined") {
             }
             if (cur === want || attempts >= MAX_ATTEMPTS) {
                 window.frameGeometryChanged.disconnect(reassert);
-                print("[vcw-window-placer] re-assert " +
+                print("[vc-window-placer] re-assert " +
                       (cur === want ? "landed on " + want : "gave up") +
                       " after " + attempts + " geometry change(s)");
             }
@@ -164,5 +164,5 @@ if (typeof _handlerRegistered === "undefined") {
         window.frameGeometryChanged.connect(reassert);
     });
 
-    print("[vcw-window-placer] windowAdded handler registered");
+    print("[vc-window-placer] windowAdded handler registered");
 }

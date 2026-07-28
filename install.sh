@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 #
-# install.sh -- Voice Commander (Whisper fork) installer
+# install.sh -- Voice Commander installer
 #
-# THIS IS THE WHISPER FORK. It installs under voice-commander-whisper
-# everywhere, fully COEXISTING with a parent Vosk install -- separate
-# data/config dirs, service names, launcher, lock socket, and KWin
-# placer. It never touches the parent's files (it only READS them to
-# seed config / copy the vosk model on first install).
+# Installs under the voice-commander namespace. 2.0.0 reclaimed that name
+# from the retired Vosk build (now the Voice-Commander-Vosk repo); every
+# path below derives from core/paths.py APP_NAME, which is what made the
+# rename a two-constant change.
 #
-#   ~/.local/share/voice-commander-whisper/app/      -- application code
-#   ~/.local/share/voice-commander-whisper/venv/     -- Python virtual environment
-#   ~/.local/share/voice-commander-whisper/icons/    -- tray + service icons
-#   ~/.local/share/voice-commander-whisper/vosk-model/ -- Vosk model (vosk backend)
-#   ~/.local/share/voice-commander-whisper/models/   -- whisper ggml + silero VAD
-#   ~/.local/share/kwin/scripts/vcw-window-placer/   -- KWin helper script
-#   ~/.config/voice-commander-whisper/commands.json  -- user-editable config
-#   ~/.config/systemd/user/voice-commander-whisper.service        -- app unit
-#   ~/.config/systemd/user/voice-commander-whisper-server.service -- whisper-server unit
-#   ~/.local/bin/voice-commander-whisper             -- launcher command
+#   ~/.local/share/voice-commander/app/      -- application code
+#   ~/.local/share/voice-commander/venv/     -- Python virtual environment
+#   ~/.local/share/voice-commander/icons/    -- tray + service icons
+#   ~/.local/share/voice-commander/vosk-model/ -- Vosk model (vosk backend)
+#   ~/.local/share/voice-commander/models/   -- whisper ggml + silero VAD
+#   ~/.local/share/kwin/scripts/vc-window-placer/   -- KWin helper script
+#   ~/.config/voice-commander/commands.json  -- user-editable config
+#   ~/.config/systemd/user/voice-commander.service        -- app unit
+#   ~/.config/systemd/user/voice-commander-server.service -- whisper-server unit
+#   ~/.local/bin/voice-commander             -- launcher command
 #
 # Re-running this script is safe: it preserves the existing commands.json
 # and uninstalls/reinstalls everything else.
@@ -25,10 +24,7 @@
 set -euo pipefail
 
 # -- Constants ---------------------------------------------------------------
-readonly APP_NAME="voice-commander-whisper"
-# Parent (Vosk daily-driver) install, read-only: used to seed config and
-# copy the vosk model instead of re-downloading. Never written to.
-readonly PARENT_APP_NAME="voice-commander"
+readonly APP_NAME="voice-commander"
 readonly REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 readonly DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/${APP_NAME}"
@@ -37,7 +33,7 @@ readonly BIN_DIR="$HOME/.local/bin"
 readonly SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 # Placer Id must match core/paths.py PLACER_ID -- it namespaces the kwinrc
 # queue group, keeping the fork's placement queue separate from the parent's.
-readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vcw-window-placer"
+readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vc-window-placer"
 
 readonly APP_DIR="${DATA_DIR}/app"
 readonly VENV_DIR="${DATA_DIR}/venv"
@@ -45,8 +41,6 @@ readonly ICONS_DIR="${DATA_DIR}/icons"
 readonly VOSK_DIR="${DATA_DIR}/vosk-model"
 readonly MODELS_DIR="${DATA_DIR}/models"
 
-readonly PARENT_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/${PARENT_APP_NAME}"
-readonly PARENT_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/${PARENT_APP_NAME}/commands.json"
 
 readonly VOSK_MODEL_NAME="vosk-model-small-en-us-0.15"
 readonly VOSK_MODEL_URL="https://alphacephei.com/vosk/models/${VOSK_MODEL_NAME}.zip"
@@ -238,11 +232,13 @@ install_venv() {
     # scipy, requests) come from requirements.txt.
     "${VENV_DIR}/bin/pip" install --quiet --no-deps openwakeword==0.6.0
     # Named interpreter symlink: the service and launcher exec through
-    # this so the process shows up as "vcw" in ps/System Monitor instead
-    # of an anonymous "python" (the kernel names a process after the
-    # path it was exec'd as; venv detection still works because
-    # pyvenv.cfg is found relative to the symlink's directory).
-    ln -sf python "${VENV_DIR}/bin/vcw"
+    # this so the process shows up as "voice-commander" in ps/System
+    # Monitor instead of an anonymous "python" (the kernel names a
+    # process after the path it was exec'd as). "voice-commander" is
+    # exactly 15 chars -- the kernel's comm limit -- so it fits untruncated.
+    # venv detection still works: pyvenv.cfg resolves relative to the
+    # symlink's directory.
+    ln -sf python "${VENV_DIR}/bin/voice-commander"
     ok "Virtual environment ready."
 }
 
@@ -267,7 +263,7 @@ install_kwin_script() {
     # (Found the hard way: every placement no-oped. The parent install only
     # worked because Tyler had enabled its plugin by hand years ago.)
     kwriteconfig6 --file "${XDG_CONFIG_HOME:-$HOME/.config}/kwinrc" \
-        --group Plugins --key "vcw-window-placerEnabled" true
+        --group Plugins --key "vc-window-placerEnabled" true
 
     # Tell KWin to reload its script list.
     if command -v dbus-send >/dev/null 2>&1; then
@@ -283,17 +279,6 @@ install_vosk_model() {
     local model_path="${VOSK_DIR}/${VOSK_MODEL_NAME}"
     if [[ -f "${model_path}/am/final.mdl" ]]; then
         ok "Vosk model already present, skipping download."
-        return
-    fi
-
-    # A parent Vosk install already has this exact model: copy instead of
-    # re-downloading 40 MB. Read-only on the parent side.
-    local parent_model="${PARENT_DATA_DIR}/vosk-model/${VOSK_MODEL_NAME}"
-    if [[ -f "${parent_model}/am/final.mdl" ]]; then
-        info "Copying Vosk model from the parent install..."
-        mkdir -p "${VOSK_DIR}"
-        cp -r "${parent_model}" "${model_path}"
-        ok "Vosk model copied from ${parent_model}."
         return
     fi
 
@@ -383,30 +368,6 @@ install_config() {
     local config="${CONFIG_DIR}/commands.json"
     if [[ -f "${config}" ]]; then
         ok "Existing commands.json preserved (not overwritten)."
-    elif [[ -f "${PARENT_CONFIG}" ]]; then
-        # First install with a parent Vosk setup present: carry the user's
-        # commands/overrides/settings over instead of starting from defaults.
-        # Whisper-only keys are absent in the copy; the app falls back to
-        # their defaults (all getters use .get()). One-time copy -- the two
-        # configs are independent from here on.
-        info "Seeding commands.json from the parent install's config..."
-        cp "${PARENT_CONFIG}" "${config}"
-        # A Models-tab absolute path in vosk_model would point the fork at
-        # the PARENT's model dir (breaks if the parent is uninstalled). The
-        # fork has its own copy, so reduce it to the bare model name, which
-        # resolves against the fork's model dir.
-        "${VENV_DIR}/bin/python" - "${config}" <<'PYEOF'
-import json, os, sys
-path = sys.argv[1]
-with open(path) as f:
-    cfg = json.load(f)
-raw = cfg.get("vosk_model", "")
-if os.path.isabs(raw):
-    cfg["vosk_model"] = os.path.basename(raw.rstrip("/"))
-    with open(path, "w") as f:
-        json.dump(cfg, f, indent=2)
-PYEOF
-        ok "Config copied from ${PARENT_CONFIG} (now independent)."
     else
         info "Generating default commands.json..."
         # Generate the default config by running core.commands as a module.
@@ -435,7 +396,7 @@ install_service() {
     info "Generating systemd user service file..."
     mkdir -p "${SYSTEMD_USER_DIR}"
     local service_file="${SYSTEMD_USER_DIR}/${APP_NAME}.service"
-    local venv_python="${VENV_DIR}/bin/vcw"
+    local venv_python="${VENV_DIR}/bin/voice-commander"
 
     sed -e "s|@VENV_PYTHON@|${venv_python}|g" \
         -e "s|@APP_DIR@|${APP_DIR}|g" \
@@ -460,7 +421,7 @@ install_launcher() {
     cat > "${launcher}" <<EOF
 #!/usr/bin/env bash
 # Voice Commander launcher (installed by install.sh -- do not edit).
-exec "${VENV_DIR}/bin/vcw" "${APP_DIR}/voice_commander.py" "\$@"
+exec "${VENV_DIR}/bin/voice-commander" "${APP_DIR}/voice_commander.py" "\$@"
 EOF
     chmod +x "${launcher}"
     ok "Launcher installed."
@@ -516,7 +477,7 @@ start_service() {
 
 # -- Main --------------------------------------------------------------------
 main() {
-    printf "${c_bold}Voice Commander (Whisper fork) installer${c_reset}\n"
+    printf "${c_bold}Voice Commander installer${c_reset}\n"
     printf "Repo:    %s\n" "${REPO_DIR}"
     printf "Install: %s\n" "${DATA_DIR}"
     echo

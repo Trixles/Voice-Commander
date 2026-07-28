@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# uninstall.sh -- Voice Commander (Whisper fork) uninstaller
+# uninstall.sh -- Voice Commander uninstaller
 #
 # Removes everything the FORK's install.sh put in place (the parent
 # voice-commander install is untouched):
@@ -13,13 +13,13 @@
 
 set -euo pipefail
 
-readonly APP_NAME="voice-commander-whisper"
+readonly APP_NAME="voice-commander"
 
 readonly DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/${APP_NAME}"
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${APP_NAME}"
 readonly BIN_DIR="$HOME/.local/bin"
 readonly SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vcw-window-placer"
+readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vc-window-placer"
 
 c_reset='\033[0m'
 c_green='\033[32m'

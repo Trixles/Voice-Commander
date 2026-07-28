@@ -17,31 +17,50 @@ their engines): only an install running wake_engine=openwakeword needs
 the package.
 """
 
+import os
+
 import core.commands as commands
 
 # openWakeWord's native frame: 1280 samples (80ms) at 16kHz.
 _OWW_FRAME_SAMPLES = 1280
 
 
-def _load_oww_model(model_path: str, vad_threshold: float = 0.0):
+def _load_oww_model(model_path: str, vad_threshold: float = 0.0,
+                    verifier_path: str | None = None,
+                    threshold: float = 0.5):
     """Build the openwakeword Model (separated for test injection).
 
     vad_threshold > 0 turns on oww's bundled Silero speech gate: a
     frame's score is forced to 0 unless the VAD saw speech just before
     it. Its onnxruntime session is explicitly 1-thread upstream, so it
-    can't reintroduce the s33 spin-pool CPU burn."""
+    can't reintroduce the s33 spin-pool CPU burn.
+
+    verifier_path adds the second-stage speaker verifier. Read
+    openwakeword/model.py:319-328 before touching this: its
+    `custom_verifier_threshold` is NOT a reject threshold -- it is the
+    base score above which the verifier runs and REPLACES the score.
+    We pin it to our own fire threshold so the verifier only ever sees
+    frames that would have fired: it can veto, never promote, and there
+    is no unverified window above it."""
     from openwakeword.model import Model  # deferred import
 
     kwargs = {"wakeword_models": [model_path], "inference_framework": "onnx"}
     if vad_threshold > 0:
         kwargs["vad_threshold"] = vad_threshold
+    if verifier_path:
+        # Key MUST be the .onnx stem -- that's the name oww gives the
+        # loaded base model. Mismatch = oww warns and silently ignores
+        # the verifier, leaving the wake word unprotected.
+        stem = os.path.splitext(os.path.basename(model_path))[0]
+        kwargs["custom_verifier_models"] = {stem: verifier_path}
+        kwargs["custom_verifier_threshold"] = threshold
     return Model(**kwargs)
 
 
 class OpenWakeWordEngine:
     """Re-chunks listener audio to oww frames and applies the threshold."""
 
-    def __init__(self, model, threshold: float):
+    def __init__(self, model, threshold: float, verified: bool = False):
         import numpy as np
 
         self._np = np
@@ -52,6 +71,13 @@ class OpenWakeWordEngine:
         # s33 false fires was blind without it: "wake detected" alone
         # can't distinguish a confident hit from a threshold squeaker.
         self.last_score = 0.0
+        # True when a verifier is active, which means last_score is the
+        # VERIFIER's probability (~0.68-0.95 on genuine wakes), not the
+        # base model's (~0.99). Different quantities from different
+        # models -- the journal line must say which one it printed.
+        self.verified = verified
+        # Set by the factory when a CONFIGURED verifier failed to load.
+        self.verifier_error: str | None = None
 
     def feed(self, data: bytes) -> bool:
         """Returns True when the wake word fired in this chunk's frames."""
@@ -90,11 +116,14 @@ def make_wake_engine_factory():
     model_path = commands.get_wake_model_path()
     threshold = commands.get_wake_threshold()
     vad_threshold = commands.get_wake_vad_threshold()
+    verifier_path = commands.get_wake_verifier_path()
 
     def factory():
         return OpenWakeWordEngine(
-            model=_load_oww_model(model_path, vad_threshold),
+            model=_load_oww_model(model_path, vad_threshold,
+                                  verifier_path, threshold),
             threshold=threshold,
+            verified=bool(verifier_path),
         )
 
     return factory

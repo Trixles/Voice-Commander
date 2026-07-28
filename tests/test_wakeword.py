@@ -136,7 +136,8 @@ def test_factory_builds_engine_from_config(monkeypatch):
     }
     built = {}
 
-    def fake_load(model_path, vad_threshold=0.0):
+    def fake_load(model_path, vad_threshold=0.0, verifier_path=None,
+                  threshold=0.5):
         built["path"] = model_path
         built["vad"] = vad_threshold
         return FakeOwwModel(scores=[0.0])
@@ -176,3 +177,94 @@ def test_score_clears_when_no_fire():
     assert eng.last_score == pytest.approx(0.9)
     eng.feed(b"\x00" * 5120)                    # two quiet frames
     assert eng.last_score == 0.0                # stale score not reused
+
+
+def test_no_verifier_kwargs_when_unset(monkeypatch):
+    commands._config = {
+        "wake_engine": "openwakeword",
+        "wake_model": "computer_v2",
+    }
+    built = {}
+
+    def fake_load(model_path, vad_threshold=0.0, verifier_path=None,
+                  threshold=0.5):
+        built["verifier_path"] = verifier_path
+        return FakeOwwModel(scores=[0.0])
+
+    monkeypatch.setattr(wakeword, "_load_oww_model", fake_load)
+    wakeword.make_wake_engine_factory()()
+    assert built["verifier_path"] is None
+
+
+def test_verifier_path_and_gate_are_passed(monkeypatch):
+    commands._config = {
+        "wake_engine": "openwakeword",
+        "wake_model": "computer_v2",
+        "wake_threshold": 0.5,
+        "wake_verifier": "computer_v2_verifier",
+    }
+    built = {}
+
+    def fake_load(model_path, vad_threshold=0.0, verifier_path=None,
+                  threshold=0.5):
+        built["verifier_path"] = verifier_path
+        built["threshold"] = threshold
+        return FakeOwwModel(scores=[0.0])
+
+    monkeypatch.setattr(wakeword, "_load_oww_model", fake_load)
+    eng = wakeword.make_wake_engine_factory()()
+    assert built["verifier_path"].endswith("wakewords/computer_v2_verifier.pkl")
+    # The gate equals the fire threshold: only frames that WOULD fire get
+    # a second opinion, so the verifier can only veto, never promote.
+    assert built["threshold"] == 0.5
+    assert eng.verified is True
+
+
+def test_gate_tracks_a_non_default_threshold(monkeypatch):
+    # Guards the footgun: a gate ABOVE wake_threshold silently creates a
+    # window of unverified fires. It must follow the threshold, always.
+    commands._config = {
+        "wake_engine": "openwakeword",
+        "wake_model": "computer_v2",
+        "wake_threshold": 0.75,
+        "wake_verifier": "computer_v2_verifier",
+    }
+    built = {}
+
+    def fake_load(model_path, vad_threshold=0.0, verifier_path=None,
+                  threshold=0.5):
+        built["threshold"] = threshold
+        return FakeOwwModel(scores=[0.0])
+
+    monkeypatch.setattr(wakeword, "_load_oww_model", fake_load)
+    wakeword.make_wake_engine_factory()()
+    assert built["threshold"] == 0.75
+
+
+def test_verifier_dict_is_keyed_by_onnx_stem(monkeypatch):
+    # oww keys custom_verifier_models by the BASE MODEL's name. A
+    # mismatch is ignored with only a warning -- unprotected while the
+    # config says otherwise.
+    captured = {}
+
+    class FakeModel:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    # `from openwakeword.model import Model` resolves through sys.modules,
+    # so a stub there intercepts the deferred import without the real
+    # package being installed. `sys` is already imported at the top of
+    # this test file.
+    monkeypatch.setitem(
+        sys.modules, "openwakeword.model", type("m", (), {"Model": FakeModel})
+    )
+    wakeword._load_oww_model(
+        "/data/wakewords/computer_v2.onnx",
+        vad_threshold=0.5,
+        verifier_path="/data/wakewords/computer_v2_verifier.pkl",
+        threshold=0.5,
+    )
+    assert captured["custom_verifier_models"] == {
+        "computer_v2": "/data/wakewords/computer_v2_verifier.pkl"
+    }
+    assert captured["custom_verifier_threshold"] == 0.5

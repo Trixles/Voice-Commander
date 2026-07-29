@@ -35,8 +35,9 @@ def _load_oww_model(model_path: str, vad_threshold: float = 0.0,
     it. Its onnxruntime session is explicitly 1-thread upstream, so it
     can't reintroduce the s33 spin-pool CPU burn.
 
-    verifier_path adds the second-stage speaker verifier. Read
-    openwakeword/model.py:319-328 before touching this: its
+    verifier_path adds the second-stage speaker verifier. Read the
+    custom-verifier block inside openwakeword's `Model.predict()`
+    before touching this: its
     `custom_verifier_threshold` is NOT a reject threshold -- it is the
     base score above which the verifier runs and REPLACES the score.
     We pin it to our own fire threshold so the verifier only ever sees
@@ -49,8 +50,9 @@ def _load_oww_model(model_path: str, vad_threshold: float = 0.0,
         kwargs["vad_threshold"] = vad_threshold
     if verifier_path:
         # Key MUST be the .onnx stem -- that's the name oww gives the
-        # loaded base model. Mismatch = oww warns and silently ignores
-        # the verifier, leaving the wake word unprotected.
+        # loaded base model. A key matching no loaded model makes oww's
+        # constructor RAISE ValueError, which the factory below catches
+        # and turns into an unverified engine: loud, but unprotected.
         stem = os.path.splitext(os.path.basename(model_path))[0]
         kwargs["custom_verifier_models"] = {stem: verifier_path}
         kwargs["custom_verifier_threshold"] = threshold

@@ -945,7 +945,10 @@ companion — keep them in sync.
     false fires the Silero gate cannot touch (coughs at 0.567-0.998,
     measured 2026-07-28; Silero correctly rates a cough as speech). The
     `.pkl` is a VOICEPRINT: user data, trained per-user by
-    `benchmark/train_v2_verifier.py`, shipped with nothing. A verifier
+    `benchmark/train_v2_verifier.py`, shipped with nothing. Never accept
+    someone else's — beyond privacy and the accuracy hit of another
+    person's voiceprint, oww `pickle.load`s the file, so a dropped-in
+    `.pkl` is arbitrary code running at engine construction. A verifier
     that fails to load leaves oww running UNVERIFIED with an always-on
     toast — it does NOT degrade to text wake, because losing the fast
     ack is the worse regression.
@@ -960,11 +963,16 @@ companion — keep them in sync.
   reaches the listener's no-match branch — it doesn't. Set
   `custom_verifier_threshold` above `wake_threshold` (opens a window of
   unverified fires — the measured 0.567 cough lives there). Key
-  `custom_verifier_models` by anything but the `.onnx` stem (oww ignores a
-  mismatch with only a warning, leaving the wake word unprotected while the
-  config claims otherwise). Compare a verified score against an unverified one
-  — different quantities from different models. Let a failed verifier load
-  reach the listener's text-wake degrade. Commit a `.pkl` to the repo.
+  `custom_verifier_models` by anything but the `.onnx` stem (oww's constructor
+  RAISES `ValueError` when a key matches no loaded base model — the factory
+  catches it and degrades to an unverified engine, so the wake word ends up
+  unprotected while the config claims otherwise). Drop `wake_threshold` below
+  0.5 while a verifier is configured — oww captures the verifier's training
+  features at a hardcoded `threshold=0.5` (`custom_verifier_model.py`), so a
+  lower gate asks it to rule on frames outside its training distribution.
+  Compare a verified score against an unverified one — different quantities
+  from different models. Let a failed verifier load reach the listener's
+  text-wake degrade. Commit a `.pkl` to the repo.
 
 ### Wake-word matching is whole-word, not substring
 - **What:** `WakeWordDetector.check()` (`core/wake.py`) matches each wake word on

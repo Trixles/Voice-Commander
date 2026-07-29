@@ -104,9 +104,9 @@ def _load_oww_model(model_path, vad_threshold=0.0, verifier_path=None,
         kwargs["vad_threshold"] = vad_threshold
     if verifier_path:
         # Key MUST be the .onnx stem -- that is the name oww gives the
-        # loaded model. Any other key and oww logs a warning, ignores
-        # the verifier, and the wake word runs unprotected while the
-        # config says otherwise.
+        # loaded model. Any other key and oww's constructor raises
+        # ValueError, the factory below degrades to unverified, and the
+        # wake word runs unprotected while the config says otherwise.
         stem = os.path.splitext(os.path.basename(model_path))[0]
         kwargs["custom_verifier_models"] = {stem: verifier_path}
         # Gate == fire threshold: only frames that would fire get a
@@ -210,7 +210,11 @@ a verifier paragraph under its audio-wake-engine bullet, and three new
 - Don't set `custom_verifier_threshold` above `wake_threshold` — it
   creates a window of unverified fires.
 - Don't key `custom_verifier_models` by anything but the `.onnx` stem —
-  oww ignores a mismatch with only a warning.
+  oww's constructor *raises* `ValueError` when a key matches no loaded
+  base model (`openwakeword/model.py`, right after the verifier pickles
+  are loaded). The factory catches that and degrades to an unverified
+  engine, so the failure is loud but the wake word still ends up
+  unprotected.
 - Don't compare a verified score against an unverified one; they are
   different quantities from different models.
 

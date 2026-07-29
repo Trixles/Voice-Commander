@@ -159,9 +159,10 @@ git commit -m "feat: add wake_verifier config key (default off)"
 
 **Critical detail:** the `custom_verifier_models` dict key MUST be the
 `.onnx` file stem (`"computer_v2"`), because that is the name oww gives
-the loaded model. Any other key and oww logs a warning, ignores the
-verifier entirely, and the wake word runs unprotected while the config
-claims otherwise — a silent failure, which is why Step 1 tests the key.
+the loaded model. Any other key and oww's constructor raises
+`ValueError`; the factory catches it and rebuilds unverified, so the
+wake word runs unprotected while the config claims otherwise — loud in
+the journal, but still unprotected, which is why Step 1 tests the key.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -231,9 +232,10 @@ def test_gate_tracks_a_non_default_threshold(monkeypatch):
 
 
 def test_verifier_dict_is_keyed_by_onnx_stem(monkeypatch):
-    # oww keys custom_verifier_models by the BASE MODEL's name. A
-    # mismatch is ignored with only a warning -- unprotected while the
-    # config says otherwise.
+    # oww keys custom_verifier_models by the BASE MODEL's name. A key
+    # that matches no loaded model makes oww's constructor raise
+    # ValueError, which the factory downgrades to an unverified engine
+    # -- unprotected while the config says otherwise.
     captured = {}
 
     class FakeModel:
@@ -293,8 +295,9 @@ def _load_oww_model(model_path: str, vad_threshold: float = 0.0,
         kwargs["vad_threshold"] = vad_threshold
     if verifier_path:
         # Key MUST be the .onnx stem -- that's the name oww gives the
-        # loaded base model. Mismatch = oww warns and silently ignores
-        # the verifier, leaving the wake word unprotected.
+        # loaded base model. A key matching no loaded model makes oww's
+        # constructor RAISE ValueError, which the factory below catches
+        # and turns into an unverified engine: loud, but unprotected.
         stem = os.path.splitext(os.path.basename(model_path))[0]
         kwargs["custom_verifier_models"] = {stem: verifier_path}
         kwargs["custom_verifier_threshold"] = threshold
@@ -747,12 +750,15 @@ Append to that invariant's `- **Don't:**` paragraph:
 ```markdown
   Set `custom_verifier_threshold` above `wake_threshold` (opens a window
   of unverified fires -- the measured 0.567 cough lives there). Key
-  `custom_verifier_models` by anything but the `.onnx` stem (oww ignores
-  a mismatch with only a warning, leaving the wake word unprotected
-  while the config claims otherwise). Compare a verified score against
-  an unverified one -- different quantities from different models. Let a
-  failed verifier load reach the listener's text-wake degrade. Commit a
-  `.pkl` to the repo.
+  `custom_verifier_models` by anything but the `.onnx` stem (oww's
+  constructor RAISES ValueError when a key matches no loaded base model;
+  the factory catches it and degrades to an unverified engine, so the
+  wake word ends up unprotected while the config claims otherwise). Drop
+  `wake_threshold` below 0.5 while a verifier is configured (oww
+  captures the verifier's training features at a hardcoded
+  threshold=0.5). Compare a verified score against an unverified one --
+  different quantities from different models. Let a failed verifier load
+  reach the listener's text-wake degrade. Commit a `.pkl` to the repo.
 ```
 
 - [ ] **Step 3: Sync HANDOFF.md**
@@ -798,7 +804,11 @@ of 8 live fires reproduced when re-scored from their own saved audio.
 Acceptance is a **live soak** (`benchmark/soak_wakeword.py`), run by
 Tyler after an explicitly approved `./install.sh` deploy:
 
-1. Set `wake_verifier: "computer_v2_verifier"` in the live config.
+1. Set BOTH keys in the live config: `wake_engine: "openwakeword"` and
+   `wake_verifier: "computer_v2_verifier"`. `wake_engine` ships as
+   `text`, and `make_wake_engine_factory()` returns `None` before it
+   ever reads `wake_verifier` — so a verifier set on a `text` install
+   does nothing at all, silently.
 2. Confirm the journal now prints `verified` on wake lines — if it
    doesn't, the verifier is not actually loaded.
 3. Quiet-room false fires at or near zero, coughs included.

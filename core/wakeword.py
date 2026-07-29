@@ -119,11 +119,31 @@ def make_wake_engine_factory():
     verifier_path = commands.get_wake_verifier_path()
 
     def factory():
-        return OpenWakeWordEngine(
-            model=_load_oww_model(model_path, vad_threshold,
-                                  verifier_path, threshold),
+        model = None
+        verifier_error = None
+        if verifier_path:
+            try:
+                model = _load_oww_model(model_path, vad_threshold,
+                                        verifier_path, threshold)
+            except Exception as e:
+                # A dead verifier costs us false-fire protection. A dead
+                # wake ENGINE costs us the fast ack entirely, so never
+                # trade the second for the first -- rebuild unverified
+                # and let the listener shout about it.
+                verifier_error = f"{os.path.basename(verifier_path)}: {e}"
+                print(f"[wakeword] Verifier failed to load, running "
+                      f"UNVERIFIED: {e}")
+        if model is None:
+            # No verifier configured, or the verified build just failed.
+            # If THIS raises, the base model is genuinely dead and the
+            # listener's text-wake degrade is the right answer.
+            model = _load_oww_model(model_path, vad_threshold)
+        engine = OpenWakeWordEngine(
+            model=model,
             threshold=threshold,
-            verified=bool(verifier_path),
+            verified=bool(verifier_path) and verifier_error is None,
         )
+        engine.verifier_error = verifier_error
+        return engine
 
     return factory

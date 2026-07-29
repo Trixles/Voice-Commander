@@ -268,3 +268,63 @@ def test_verifier_dict_is_keyed_by_onnx_stem(monkeypatch):
         "computer_v2": "/data/wakewords/computer_v2_verifier.pkl"
     }
     assert captured["custom_verifier_threshold"] == 0.5
+
+
+def test_verifier_load_failure_yields_unverified_engine(monkeypatch):
+    # A missing/corrupt pickle must NOT take the wake engine down: that
+    # would trip the listener's text-wake degrade and cost the ~150ms
+    # ack, which is a worse regression than the false fires.
+    commands._config = {
+        "wake_engine": "openwakeword",
+        "wake_model": "computer_v2",
+        "wake_verifier": "computer_v2_verifier",
+    }
+    calls = []
+
+    def fake_load(model_path, vad_threshold=0.0, verifier_path=None,
+                  threshold=0.5):
+        calls.append(verifier_path)
+        if verifier_path:
+            raise FileNotFoundError(verifier_path)
+        return FakeOwwModel(scores=[0.0])
+
+    monkeypatch.setattr(wakeword, "_load_oww_model", fake_load)
+    eng = wakeword.make_wake_engine_factory()()
+
+    assert eng.verifier_error is not None
+    assert "computer_v2_verifier" in eng.verifier_error
+    assert eng.verified is False           # don't claim protection we lost
+    assert calls[-1] is None               # retried WITHOUT the verifier
+    assert eng.feed(b"\x00" * 2560) is False   # engine is alive and usable
+
+
+def test_base_model_failure_still_propagates(monkeypatch):
+    # No verifier involved -- a dead base model has no working engine to
+    # fall back to, so it must reach the listener's text-wake degrade.
+    commands._config = {
+        "wake_engine": "openwakeword",
+        "wake_model": "computer_v2",
+    }
+
+    def fake_load(model_path, vad_threshold=0.0, verifier_path=None,
+                  threshold=0.5):
+        raise OSError("no such model")
+
+    monkeypatch.setattr(wakeword, "_load_oww_model", fake_load)
+    with pytest.raises(OSError):
+        wakeword.make_wake_engine_factory()()
+
+
+def test_healthy_verifier_leaves_no_error(monkeypatch):
+    commands._config = {
+        "wake_engine": "openwakeword",
+        "wake_model": "computer_v2",
+        "wake_verifier": "computer_v2_verifier",
+    }
+    monkeypatch.setattr(
+        wakeword, "_load_oww_model",
+        lambda *a, **k: FakeOwwModel(scores=[0.0]),
+    )
+    eng = wakeword.make_wake_engine_factory()()
+    assert eng.verifier_error is None
+    assert eng.verified is True

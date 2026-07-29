@@ -19,11 +19,26 @@ Held out so the evaluation isn't circular:
 import glob
 import os
 import sys
+import wave
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import numpy as np
 import openwakeword
 from openwakeword.model import Model
-from spike_oww_wakeword import load_wav, CHUNK
+
+# CHUNK and load_wav are INLINED verbatim from spike_oww_wakeword.py.
+# This file is the one tracked thing under benchmark/ (everything else
+# is gitignored), so importing from the spike would make the tracked
+# trainer unrunnable from a fresh clone -- the exact durability problem
+# tracking it was meant to solve. Keep them byte-identical to the spike.
+CHUNK = 1280  # 80ms at 16kHz -- oww's native frame size
+
+
+def load_wav(path: str) -> np.ndarray:
+    with wave.open(path, "rb") as w:
+        assert w.getframerate() == 16000 and w.getnchannels() == 1, "expected 16kHz mono"
+        return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+
 
 BENCH = os.path.dirname(os.path.abspath(__file__))
 # core/paths.py is the single source of install identity and is
@@ -34,8 +49,11 @@ import core.paths as paths  # noqa: E402
 V2 = f"{BENCH}/wakewords/computer_v2.onnx"
 # Deploy target: the drop-in dir the app reads, alongside the .onnx
 # models. install.sh skips files already present here, so a reinstall
-# will not clobber it. The benchmark copy stays for the offline
-# evaluation table this script prints.
+# will not clobber it. This is the ONLY write target -- the evaluation
+# table below scores OUT directly, so no benchmark copy is made. NOTE:
+# the pre-existing verifier_clips/computer_v2_verifier.pkl is now a
+# stale artifact of an earlier run and will diverge on the next
+# retrain; the live one is OUT.
 OUT = os.path.join(paths.DATA_DIR, "wakewords", "computer_v2_verifier.pkl")
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
@@ -84,10 +102,15 @@ held_true = [p for p in sorted(glob.glob(f"{BENCH}/soak/fire_*.wav"))
              if os.path.basename(p) in R2_GENUINE]
 holdout_pos = sorted(glob.glob(f"{BENCH}/verifier_clips/pos_holdout/*.wav"))
 
-print(f"{'clip':40s} {'no verifier':>12s} {'+verifier':>10s}")
+# The verifier column is scored at gate 0.5 because that is what SHIPS:
+# core/wakeword.py pins custom_verifier_threshold to wake_threshold, and
+# the live config runs computer_v2 @ 0.5. A lower gate (0.3) measures the
+# "promotion possible" regime the design spec explicitly leaves unmeasured
+# -- useful someday, but it is not the behavior this table is judging.
+print(f"{'clip':40s} {'no verifier':>12s} {'+verifier@0.5':>13s}")
 for label, clips in (("HELD-OUT FALSE FIRES (want LOW)", held_false),
                      ("GENUINE WAKES (want HIGH)", held_true),
                      ("HOLDOUT POSITIVES (want HIGH)", holdout_pos)):
     print(f"-- {label}")
     for p in clips:
-        print(f"  {os.path.basename(p):38s} {peak(p):12.3f} {peak(p, 0.3):10.3f}")
+        print(f"  {os.path.basename(p):38s} {peak(p):12.3f} {peak(p, 0.5):13.3f}")

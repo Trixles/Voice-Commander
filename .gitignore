@@ -41,7 +41,13 @@ HANDOFF.md
 commands.json
 
 # -- Whisper benchmark scratch (models + recorded samples, hundreds of MB) ----
-benchmark/
+# `benchmark/*`, NOT `benchmark/` -- git does not descend into an ignored
+# DIRECTORY, so a trailing-slash form makes the negation below impossible.
+# The trainer is tracked because it is the only means of rebuilding the
+# wake verifier .pkl; it must stay dependency-free of its untracked
+# neighbours (see the inlined helpers at the top of it).
+benchmark/*
+!benchmark/train_v2_verifier.py
 
 # -- Logs / temp --------------------------------------------------------------
 *.log

@@ -62,9 +62,25 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
     monkeypatch.setattr(listener, "_start_reader", lambda proc: audio)
 
     # Notifications are side effects; capture instead of toasting.
+    # `notification_sources` is a parallel list (same index as
+    # `notifications`) recording which of the two functions produced each
+    # entry. That distinction is load-bearing: _notify always fires,
+    # _notify_general is silenceable via the Options-tab toggle. Kept
+    # separate from `notifications` so the many existing tests that index
+    # `n[0]`/`n[1]` on a notification tuple see no change in shape.
     notifications = []
-    monkeypatch.setattr(listener, "_notify", lambda *a, **k: notifications.append(a))
-    monkeypatch.setattr(listener, "_notify_general", lambda *a, **k: notifications.append(a))
+    notification_sources = []
+
+    def _record_notify(*a, **k):
+        notifications.append(a)
+        notification_sources.append("_notify")
+
+    def _record_notify_general(*a, **k):
+        notifications.append(a)
+        notification_sources.append("_notify_general")
+
+    monkeypatch.setattr(listener, "_notify", _record_notify)
+    monkeypatch.setattr(listener, "_notify_general", _record_notify_general)
 
     # Config readers hit disk; pin them.
     monkeypatch.setattr(commands, "get_command_window", lambda: 8)
@@ -108,6 +124,7 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
         "rec": rec,
         "factories": factories,
         "notifications": notifications,
+        "notification_sources": notification_sources,
     }
 
 
@@ -485,7 +502,15 @@ def test_verifier_load_failure_toasts_loudly(monkeypatch):
         monkeypatch,
         wake_engine=eng,
     )
-    assert any("Wake verifier failed" in n[0] for n in r["notifications"])
+    matches = [
+        src for n, src in zip(r["notifications"], r["notification_sources"])
+        if "Wake verifier failed" in n[0]
+    ]
+    assert matches, "expected a 'Wake verifier failed' notification"
+    # The whole point of this task: this toast must come from _notify, not
+    # _notify_general, so it can't be silenced by the notifications toggle.
+    # A swap back to _notify_general at the call site must fail here.
+    assert matches == ["_notify"] * len(matches)
 
 
 def test_healthy_verifier_does_not_toast(monkeypatch):

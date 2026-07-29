@@ -368,7 +368,25 @@ def run_listener(
         # (wake-only -> swallowed; wake+command -> matcher tolerates the
         # prefix), so an audio wake needs no new state handling.
         if wake_engine is not None and context.state == State.SLEEPING:
-            if wake_engine.feed(data):
+            # Same degrade rung as the construction failure above, just
+            # later in the engine's life. feed() runs USER-SUPPLIED
+            # pickled code once a verifier is configured (sklearn
+            # version skew raising inside predict_proba is the classic
+            # one), and an escaping exception here kills this thread and
+            # leaves the app deaf behind a healthy tray icon -- exactly
+            # the s31 failure. Dropping the engine (not just swallowing)
+            # matters: otherwise every subsequent frame re-raises and
+            # re-toasts.
+            try:
+                fired = wake_engine.feed(data)
+            except Exception as e:
+                print(f"[listener] Wake engine died mid-run, falling back to text wake: {e}")
+                _notify("Wake engine failed",
+                        "Falling back to transcription-based wake -- check the journal.",
+                        gui_env=gui_env)
+                wake_engine = None
+                fired = False
+            if fired:
                 command_window = commands.get_command_window()
                 matched_since_wake = False
                 # Score goes to the JOURNAL only -- a false fire and a genuine

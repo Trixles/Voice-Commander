@@ -532,3 +532,54 @@ def test_verified_audio_wake_still_reaches_listening(monkeypatch):
         wake_engine=eng,
     )
     assert State.LISTENING in r["states"]
+
+
+class ExplodingWakeEngine:
+    """Constructs fine, then dies on the first frame -- the shape of a
+    verifier .pkl that unpickles but raises inside predict_proba
+    (sklearn version skew after a venv rebuild)."""
+
+    def __init__(self):
+        self.calls = 0
+        self.verified = True
+        self.verifier_error = None
+        self.last_score = 0.0
+
+    def feed(self, data):
+        self.calls += 1
+        raise RuntimeError("X has 96 features, but StandardScaler expects 48")
+
+
+def test_wake_engine_death_mid_run_degrades_to_text_wake(monkeypatch):
+    # An exception out of feed() used to escape run_listener entirely and
+    # kill the listener THREAD, leaving the app deaf behind a healthy
+    # tray icon (the s31 failure). It must degrade to text wake instead.
+    eng = ExplodingWakeEngine()
+    r = run_machine(
+        [RecognizerEvent("partial", ""), RecognizerEvent("partial", ""),
+         RecognizerEvent("partial", "")],
+        monkeypatch,
+        wake_engine=eng,
+    )
+    matches = [
+        src for n, src in zip(r["notifications"], r["notification_sources"])
+        if "Wake engine failed" in n[0]
+    ]
+    assert matches, "expected a 'Wake engine failed' notification"
+    # Always-on toast: a deaf wake path must not be silenceable by the
+    # Options-tab notifications toggle.
+    assert matches == ["_notify"]
+    # Dropped after the first raise -- not retried (and re-toasted) on
+    # every subsequent frame.
+    assert eng.calls == 1
+
+
+def test_dead_wake_engine_still_wakes_on_text(monkeypatch):
+    # The degrade is only worth anything if text wake actually takes
+    # over afterwards.
+    r = run_machine(
+        [RecognizerEvent("partial", ""), RecognizerEvent("partial", "computer")],
+        monkeypatch,
+        wake_engine=ExplodingWakeEngine(),
+    )
+    assert State.LISTENING in r["states"]

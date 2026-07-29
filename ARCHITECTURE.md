@@ -935,6 +935,20 @@ companion — keep them in sync.
     `wake_engine=text` (default) keeps classic transcription-based
     wake. openwakeword installs `--no-deps` (its tflite-runtime dep
     has no py3.13+ wheels; onnx path only — see install.sh).
+  - **Speaker verifier (s34):** config `wake_verifier` (file stem in
+    `DATA_DIR/wakewords/`, `.pkl`, empty = off, shipped off) adds
+    openWakeWord's second-stage verifier: a frame scoring at or above
+    `custom_verifier_threshold` is re-scored by the verifier, whose
+    output REPLACES the base score. VC pins that gate to
+    `wake_threshold`, so the verifier only ever sees frames that would
+    have fired -- it can veto, never promote. It exists to kill VOCAL
+    false fires the Silero gate cannot touch (coughs at 0.567-0.998,
+    measured 2026-07-28; Silero correctly rates a cough as speech). The
+    `.pkl` is a VOICEPRINT: user data, trained per-user by
+    `benchmark/train_v2_verifier.py`, shipped with nothing. A verifier
+    that fails to load leaves oww running UNVERIFIED with an always-on
+    toast -- it does NOT degrade to text wake, because losing the fast
+    ack is the worse regression.
 - **Why:** Pre-fix, feedback waited for finalize, so "Listening…" arrived ~1.5s
   late or simultaneously with execution. And a no-match used to leave you in
   LISTENING, so the command-window-expiry path fired a SECOND "No match" — two
@@ -943,7 +957,14 @@ companion — keep them in sync.
 - **Don't:** Gate wake detection on finalized results only. Make the command
   window wall-clock again. Toast on a wake-only utterance. Leave LISTENING after
   a total miss (reintroduces the double "No match"). Assume a partial-good chain
-  reaches the listener's no-match branch — it doesn't.
+  reaches the listener's no-match branch — it doesn't. Set
+  `custom_verifier_threshold` above `wake_threshold` (opens a window of
+  unverified fires -- the measured 0.567 cough lives there). Key
+  `custom_verifier_models` by anything but the `.onnx` stem (oww ignores a
+  mismatch with only a warning, leaving the wake word unprotected while the
+  config claims otherwise). Compare a verified score against an unverified one
+  -- different quantities from different models. Let a failed verifier load
+  reach the listener's text-wake degrade. Commit a `.pkl` to the repo.
 
 ### Wake-word matching is whole-word, not substring
 - **What:** `WakeWordDetector.check()` (`core/wake.py`) matches each wake word on

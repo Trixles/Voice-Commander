@@ -12,7 +12,9 @@ wake_threshold. Factory returns None for "text" -- the listener treats
 a None engine as "no audio wake" and behaves exactly as before.
 """
 
+import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -69,6 +71,24 @@ def test_wake_verifier_path_resolves_stem_to_pkl():
     assert commands.get_wake_verifier_path() == os.path.join(
         paths.DATA_DIR, "wakewords", "computer_v2_verifier.pkl"
     )
+
+
+def test_emit_defaults_ships_the_verifier_off():
+    # The accessor test above proves an EMPTY config means off; this one
+    # proves the config install.sh actually WRITES is empty. Without it,
+    # someone could put a real stem in the --emit-defaults block and keep
+    # every other test green -- while every fresh install toasts "Wake
+    # verifier failed", because the .pkl is user data that ships with
+    # nothing. Note `""`, not `None`: a missing key would read as null.
+    out = subprocess.run(
+        [sys.executable, "-m", "core.commands", "--emit-defaults"],
+        capture_output=True, text=True,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    config = json.loads(out.stdout)
+    assert config["wake_verifier"] == ""
+    # Same reasoning for the engine: audio wake is opt-in.
+    assert config["wake_engine"] == "text"
 
 
 class FakeOwwModel:
@@ -242,9 +262,10 @@ def test_gate_tracks_a_non_default_threshold(monkeypatch):
 
 
 def test_verifier_dict_is_keyed_by_onnx_stem(monkeypatch):
-    # oww keys custom_verifier_models by the BASE MODEL's name. A
-    # mismatch is ignored with only a warning -- unprotected while the
-    # config says otherwise.
+    # oww keys custom_verifier_models by the BASE MODEL's name. A key
+    # that matches no loaded model makes oww's constructor raise
+    # ValueError, which the factory downgrades to an unverified engine
+    # -- unprotected while the config says otherwise.
     captured = {}
 
     class FakeModel:
@@ -328,3 +349,33 @@ def test_healthy_verifier_leaves_no_error(monkeypatch):
     eng = wakeword.make_wake_engine_factory()()
     assert eng.verifier_error is None
     assert eng.verified is True
+
+
+def test_double_failure_propagates_to_the_text_wake_degrade(monkeypatch):
+    # Verifier load fails AND the unverified rebuild fails too: there is
+    # no working engine left, so the exception must escape the factory
+    # and reach the listener's text-wake fallback. The unverified retry
+    # deliberately sits OUTSIDE the try -- a refactor that tucked it
+    # inside would swallow this and hand the listener a half-built
+    # engine, i.e. a deaf app behind a healthy tray icon.
+    commands._config = {
+        "wake_engine": "openwakeword",
+        "wake_model": "computer_v2",
+        "wake_verifier": "computer_v2_verifier",
+    }
+    calls = []
+
+    def fake_load(model_path, vad_threshold=0.0, verifier_path=None,
+                  threshold=0.5):
+        calls.append(verifier_path)
+        if verifier_path:
+            raise ValueError("bad pickle")
+        raise OSError("no such model")
+
+    monkeypatch.setattr(wakeword, "_load_oww_model", fake_load)
+    with pytest.raises(OSError):
+        wakeword.make_wake_engine_factory()()
+    # Both attempts happened: verified first, then the unverified retry.
+    assert len(calls) == 2
+    assert calls[0].endswith("computer_v2_verifier.pkl")
+    assert calls[1] is None

@@ -452,3 +452,58 @@ def test_wake_engine_factory_failure_degrades_to_text_wake(monkeypatch, capsys):
     # Text wake still worked: the partial woke the machine.
     assert context.state == State.LISTENING
     assert "wake engine failed" in capsys.readouterr().out.lower()
+
+
+# NOTE: named distinctly from the FakeWakeEngine above (fires-list based) --
+# same seam contract (feed(chunk) -> fired?), but this one also carries the
+# verifier attributes (Task 3's engine.verified / engine.verifier_error).
+# A same-named class here would silently clobber the module-level
+# `FakeWakeEngine` name and break the fires-list tests above (Python
+# resolves globals at call time, not def time).
+class FakeVerifiableWakeEngine:
+    """Seam-conformant audio wake engine: feed(chunk) -> fired?."""
+
+    def __init__(self, fire_on=None, verified=False, verifier_error=None):
+        self.calls = 0
+        self.fire_on = fire_on
+        self.last_score = 0.82
+        self.verified = verified
+        self.verifier_error = verifier_error
+
+    def feed(self, data):
+        fired = self.calls == self.fire_on
+        self.calls += 1
+        return fired
+
+
+def test_verifier_load_failure_toasts_loudly(monkeypatch):
+    # Unprotected wake must be impossible to miss -- and impossible to
+    # silence via the notifications toggle (_notify, not _notify_general).
+    eng = FakeVerifiableWakeEngine(verifier_error="computer_v2_verifier.pkl: boom")
+    r = run_machine(
+        [RecognizerEvent("partial", ""), RecognizerEvent("partial", "")],
+        monkeypatch,
+        wake_engine=eng,
+    )
+    assert any("Wake verifier failed" in n[0] for n in r["notifications"])
+
+
+def test_healthy_verifier_does_not_toast(monkeypatch):
+    eng = FakeVerifiableWakeEngine(verified=True)
+    r = run_machine(
+        [RecognizerEvent("partial", ""), RecognizerEvent("partial", "")],
+        monkeypatch,
+        wake_engine=eng,
+    )
+    assert not any("verifier" in n[0].lower() for n in r["notifications"])
+
+
+def test_verified_audio_wake_still_reaches_listening(monkeypatch):
+    # The verifier changes what last_score MEANS, not the wake path.
+    eng = FakeVerifiableWakeEngine(fire_on=0, verified=True)
+    r = run_machine(
+        [RecognizerEvent("partial", ""), RecognizerEvent("partial", "")],
+        monkeypatch,
+        wake_engine=eng,
+    )
+    assert State.LISTENING in r["states"]

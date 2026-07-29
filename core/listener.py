@@ -263,6 +263,17 @@ def run_listener(
             _notify("Wake engine failed",
                     "Falling back to transcription-based wake -- check the journal.",
                     gui_env=gui_env)
+        else:
+            # The engine is alive but a CONFIGURED verifier didn't load,
+            # so the wake word is running without its false-fire filter.
+            # _notify, not _notify_general: this must not be silenceable
+            # by the notifications toggle.
+            if getattr(wake_engine, "verifier_error", None):
+                print("[listener] Wake verifier failed to load, wake word is "
+                      f"UNVERIFIED: {wake_engine.verifier_error}")
+                _notify("Wake verifier failed",
+                        "Wake word is running unverified -- retrain the verifier.",
+                        gui_env=gui_env)
 
     print(f"[listener] Listening on: {source}")
 
@@ -364,8 +375,12 @@ def run_listener(
                 # wake look identical without it (s33 spent a day blind), but
                 # it's diagnostic noise in the user-facing Settings log, which
                 # stays identical to the other two wake paths below.
+                # "verified" marks a VERIFIER probability (~0.68-0.95 on a
+                # genuine wake), not a base-model score (~0.99) -- never
+                # compare the two across that boundary.
                 score = getattr(wake_engine, "last_score", 0.0)
-                print(f"[listener] Wake word detected (audio engine, score {score:.3f}).")
+                tag = " verified" if getattr(wake_engine, "verified", False) else ""
+                print(f"[listener] Wake word detected (audio engine,{tag} score {score:.3f}).")
                 log("Wake word detected")
                 _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
                 set_state(State.LISTENING)

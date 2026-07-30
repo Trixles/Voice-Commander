@@ -47,7 +47,11 @@ commands.json
 # wake verifier .pkl; it must stay dependency-free of its untracked
 # neighbours (see the inlined helpers at the top of it).
 benchmark/*
+# The evaluation harness is ~900MB of models, venv and audio -- ignored.
+# These two scripts are the exception: they are how the wake word gets
+# retrained and certified, so losing them loses the ability to do either.
 !benchmark/train_v2_verifier.py
+!benchmark/soak_wakeword.py
 
 # -- Logs / temp --------------------------------------------------------------
 *.log

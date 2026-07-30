@@ -1,7 +1,9 @@
 # Wake-word speaker verifier — design
 
 **Date:** 2026-07-28 (session 34)
-**Status:** approved, not yet implemented
+**Status:** implemented and deployed 2026-07-29 on branch
+`wake-verifier`; recall confirmed live, suppression UNPROVEN — see
+"Live results" at the end of this document before acting on it.
 **Priority:** HANDOFF priority 1 — kill quiet-room false fires
 
 ## Problem
@@ -224,3 +226,93 @@ a verifier paragraph under its audio-wake-engine bullet, and three new
 (`voice-commander-whisper`, placer id `vcw-window-placer`,
 `tests/test_fork_identity.py` — now `tests/test_install_identity.py`).
 Unrelated to this work; flagged for separate cleanup.
+
+## Live results — 2026-07-29
+
+Deployed via `install.sh` (deployed `core/` byte-verified against the
+repo), live config `wake_engine: openwakeword` +
+`wake_verifier: computer_v2_verifier`, gate and Silero speech gate both
+0.5. Verifier load confirmed positively, not merely by absence of error:
+`OpenWakeWordEngine.verified is True`, `verifier_error is None`.
+
+### Recall — CONFIRMED
+
+Five genuine wakes, five fires, every journal line tagged: 0.745, 0.929,
+0.903, 0.857, 0.816. All inside the 0.68–0.95 band the held-out clips
+predicted. The verifier does not eat real wakes at normal speaking
+distance, and a full command plus a chain segment dispatched correctly
+through it.
+
+### Suppression — NOT ESTABLISHED
+
+Zero cough false-fires with the verifier on. That result cannot be
+credited to the verifier, because the A/B says the condition did not
+reproduce at all:
+
+With `wake_verifier: ""` and everything else identical, **zero coughs
+fired the wake engine.** Four `cough` transcripts and one `burps`
+appeared in SLEEPING (whisper's transcription path, not the wake path)
+and none woke it. Both fires during the A/B window were the operator
+actually saying the wake word — `score 0.977` and `score 0.997`, each
+followed by `Heard (listening): computer`, and neither carrying the
+`verified` tag, which also confirms the A/B was genuinely in the off
+state.
+
+So the 2026-07-28 cough false-fires (0.567 / 0.794 / 0.998 / 0.893)
+would not reproduce on demand. A deliberate test cough is not the same
+acoustic event as the involuntary coughs that accumulated those scores
+across a full day of real use. The only evidence favouring the verifier
+remains the offline training result — it suppressed the held-out
+recorded false-fires while keeping genuine wakes — and that is
+file-scored, which the standing methodology law says cannot certify live
+wake behavior.
+
+### Consequence for how this gets certified
+
+Deliberate provocation is not a valid test for this bug: you cannot
+schedule an involuntary cough. Only accumulated real use can certify it.
+
+Note the blind spot that makes even a long soak weak evidence: **a veto
+logs nothing.** When the verifier suppresses a fire there is no trace,
+so a clean soak shows an absence rather than a count of saves, and
+"suppressed a 0.998 cough" is indistinguishable from "that cough scored
+0.2 today". Making saves visible requires scoring base-and-verified in
+parallel — soak-script work (`benchmark/soak_wakeword.py`), not app
+work, since oww overwrites the base score in place.
+
+The one signal that would falsify the approach and send us to the
+retrain path (priority 3): a journal line carrying `verified` that came
+from a cough.
+
+### The first soak was lost — do not certify from the journal
+
+The 2026-07-29 evening soak ran for 3h 05m (systemd's own accounting)
+and produced **no usable evidence**: by the next day the user journal
+retained only the final ~70 seconds before shutdown. Ten lines survived
+from the entire day.
+
+Cause, measured rather than assumed: the user journal caps around 37 MB
+and rotates a 6.5 MB file roughly every 50 minutes under load. A Claude
+Code session running a review fleet emitted ~96,000 of the next day's
+116,000 user-journal lines — 83% — and evicted the soak window. Any
+heavy `--user` logger will do the same; this is not specific to one
+tool.
+
+**Consequence: the journal is not an instrument.** It is fine for
+watching behavior live, and useless as a record. Wake-score logging via
+`journalctl` cannot certify anything that has to survive overnight.
+
+Certify with `benchmark/soak_wakeword.py` instead. It writes
+`soak/soak_log.txt` plus a 4-second WAV per fire, so its evidence is
+file-based and immune to rotation — and it scores the SAME audio
+through three streams at once (`v2` ungated control, `v2+vad`
+production-before, `v2+vad+ver` the candidate). That last property also
+answers the blind spot above: a cough that fires `v2+vad` but not
+`v2+vad+ver` is the verifier's veto captured as a positive fact rather
+than inferred from an absence. The off-then-on A/B run on 2026-07-29 was
+the wrong method — it compared different moments in time instead of the
+same audio, which is exactly why it could not distinguish "the verifier
+suppressed it" from "the cough never scored high that time".
+
+Note the script's gate ran at 0.3 until 2026-07-30, below production's
+0.5. Soak logs older than that measured a config production never ran.

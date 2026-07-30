@@ -39,7 +39,16 @@ BENCH = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BENCH)
 from openwakeword.model import Model  # noqa: E402
 
-OUT = os.path.join(BENCH, "soak")
+# Per-round output dir, overridable: VC_SOAK_DIR=soak/round3 ./oww-venv/...
+#
+# Give every soak round its OWN directory. train_v2_verifier.py globs
+# `soak/fire_*.wav` (non-recursive) as training NEGATIVES, so dumps left
+# loose in soak/ get silently conscripted into the next retrain -- and a
+# soak's fires include the operator genuinely saying the wake word.
+# Training on a real "computer" as a negative poisons the verifier; the
+# trainer already carries a hand-maintained exclude list because of it.
+# A subdirectory keeps that list finite instead of growing every round.
+OUT = os.path.join(BENCH, os.environ.get("VC_SOAK_DIR", "soak"))
 os.makedirs(OUT, exist_ok=True)
 
 SR = 16000

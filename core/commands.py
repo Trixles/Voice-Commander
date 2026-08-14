@@ -650,6 +650,20 @@ def get_wake_verifier_path() -> str | None:
     return os.path.join(paths.DATA_DIR, "wakewords", f"{name}.pkl")
 
 
+def get_wake_audio_dump_dir() -> str | None:
+    """Diagnostic capture of the audio that fires the wake engine: the
+    directory to dump `.wav`s into when `wake_audio_dump` is on, else None.
+
+    Off by default. A false fire otherwise leaves nothing to inspect --
+    the engine judges raw sound and the waveform is gone by the time the
+    journal records the score. See `core/wake_dump.py` for the privacy
+    shape (only SLEEPING audio is ever buffered; the command you speak
+    afterward never is)."""
+    if not _config.get("wake_audio_dump", False):
+        return None
+    return os.path.join(paths.DATA_DIR, "wake_dumps")
+
+
 def get_vosk_model_path() -> str:
     """
     Return the absolute path to the Vosk model directory.
@@ -1472,6 +1486,7 @@ if __name__ == "__main__":
             "wake_threshold": 0.5,
             "wake_vad_threshold": 0.5,
             "wake_verifier": "",
+            "wake_audio_dump": False,
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],

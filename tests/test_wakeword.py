@@ -180,6 +180,21 @@ def test_wake_vad_threshold_config():
     assert commands.get_wake_vad_threshold() == 0
 
 
+def test_wake_audio_dump_dir_off_by_default():
+    # Diagnostic audio capture ships OFF -- a fresh install never writes
+    # room audio to disk unless the user turns it on.
+    commands._config = {}
+    assert commands.get_wake_audio_dump_dir() is None
+    commands._config = {"wake_audio_dump": False}
+    assert commands.get_wake_audio_dump_dir() is None
+
+
+def test_wake_audio_dump_dir_when_enabled():
+    commands._config = {"wake_audio_dump": True}
+    d = commands.get_wake_audio_dump_dir()
+    assert d == os.path.join(paths.DATA_DIR, "wake_dumps")
+
+
 def test_fire_records_score_for_logging():
     # Without the score, a false fire and a genuine wake are
     # indistinguishable in the logs -- s33 debugged blind for a day.

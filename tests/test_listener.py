@@ -583,3 +583,54 @@ def test_dead_wake_engine_still_wakes_on_text(monkeypatch):
         wake_engine=ExplodingWakeEngine(),
     )
     assert State.LISTENING in r["states"]
+
+
+class ScoredWakeEngine:
+    """Fires on the first frame with a known score, for dump tests."""
+
+    def __init__(self, score=0.823):
+        self.last_score = score
+        self._fired = False
+
+    def feed(self, data):
+        if self._fired:
+            return False
+        self._fired = True
+        return True
+
+
+def test_audio_wake_dumps_when_capture_enabled(monkeypatch):
+    # With capture on, an audio-engine fire writes the buffered SLEEPING
+    # audio out via wake_dump.dump, tagged with the firing score.
+    monkeypatch.setattr(commands, "get_wake_audio_dump_dir", lambda: "/tmp/vc-dumps")
+    calls = []
+    monkeypatch.setattr(listener.wake_dump, "dump",
+                        lambda d, pcm, score, **k: calls.append((d, pcm, score)) or "x.wav")
+
+    eng = ScoredWakeEngine(score=0.823)
+    run_machine(
+        [RecognizerEvent("partial", ""), RecognizerEvent("partial", "")],
+        monkeypatch,
+        wake_engine=eng,
+    )
+    assert len(calls) == 1
+    d, pcm, score = calls[0]
+    assert d == "/tmp/vc-dumps"
+    assert score == 0.823
+    assert pcm == b"chunk0"      # the SLEEPING chunk that fired, buffered
+
+
+def test_no_dump_when_capture_disabled(monkeypatch):
+    # Default: capture off -> no ring, no dump call, no audio to disk.
+    monkeypatch.setattr(commands, "get_wake_audio_dump_dir", lambda: None)
+    calls = []
+    monkeypatch.setattr(listener.wake_dump, "dump",
+                        lambda *a, **k: calls.append(a) or "x.wav")
+
+    eng = ScoredWakeEngine()
+    run_machine(
+        [RecognizerEvent("partial", ""), RecognizerEvent("partial", "")],
+        monkeypatch,
+        wake_engine=eng,
+    )
+    assert calls == []

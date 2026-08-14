@@ -39,6 +39,7 @@ from core.run import get_default_source
 from core.wake import WakeWordDetector
 import core.commands as commands
 import core.overrides as overrides
+from core import wake_dump
 
 
 def _notify_general(*args, **kwargs) -> None:
@@ -277,6 +278,14 @@ def run_listener(
 
     print(f"[listener] Listening on: {source}")
 
+    # Optional wake-audio capture (diagnostic, off by default). Keeps the
+    # last few seconds of SLEEPING audio in memory and writes it out ONLY
+    # when the audio engine fires, so a misfire becomes a concrete .wav
+    # instead of a lost waveform. Pushed only in SLEEPING (see the wake
+    # block below), so it captures what WOKE the app, never the command.
+    wake_dump_dir = commands.get_wake_audio_dump_dir()
+    wake_ring = wake_dump.WakeAudioRing() if wake_dump_dir else None
+
     command_window_start: float = 0.0
     command_window: int = commands.get_command_window()
     confirm_start: float = 0.0
@@ -368,6 +377,11 @@ def run_listener(
         # (wake-only -> swallowed; wake+command -> matcher tolerates the
         # prefix), so an audio wake needs no new state handling.
         if wake_engine is not None and context.state == State.SLEEPING:
+            # Buffer this chunk BEFORE feeding, so the frame that fires is
+            # part of the dump. Only ever pushed here in SLEEPING -- the
+            # ring never sees LISTENING (command) audio.
+            if wake_ring is not None:
+                wake_ring.push(data)
             # Same degrade rung as the construction failure above, just
             # later in the engine's life. feed() runs USER-SUPPLIED
             # pickled code once a verifier is configured (sklearn
@@ -399,6 +413,17 @@ def run_listener(
                 score = getattr(wake_engine, "last_score", 0.0)
                 tag = " verified" if getattr(wake_engine, "verified", False) else ""
                 print(f"[listener] Wake word detected (audio engine,{tag} score {score:.3f}).")
+                # Write the audio that just fired, if capture is on. Wrapped
+                # so a disk/permissions fault in a diagnostic can never take
+                # down the wake path; cleared after so the next fire's dump
+                # doesn't carry this one's tail.
+                if wake_ring is not None:
+                    try:
+                        path = wake_dump.dump(wake_dump_dir, wake_ring.snapshot(), score)
+                        print(f"[listener] Wake audio dumped -> {path}")
+                    except Exception as e:
+                        print(f"[listener] Wake audio dump failed: {e}")
+                    wake_ring.clear()
                 log("Wake word detected")
                 _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
                 set_state(State.LISTENING)

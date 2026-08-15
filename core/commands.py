@@ -664,6 +664,18 @@ def get_wake_audio_dump_dir() -> str | None:
     return os.path.join(paths.DATA_DIR, "wake_dumps")
 
 
+def get_wake_confirm() -> float:
+    """Fuzzy threshold for confirming an AUDIO wake against whisper's text
+    (0 disables). The audio engine acks instantly on sound; this then checks
+    that whisper's transcript of the same utterance actually contains the
+    wake word (within this tolerance) or produced a command. If neither, the
+    wake was a false fire and the listener sleeps SILENTLY instead of nagging
+    "No match". Zero added latency -- the ack already happened; only the
+    revert of a phantom is deferred. Lower = more forgiving of whisper
+    mishearings (fewer missed real wakes, more junk let through)."""
+    return float(_config.get("wake_confirm", 0.7))
+
+
 def get_vosk_model_path() -> str:
     """
     Return the absolute path to the Vosk model directory.
@@ -1487,6 +1499,7 @@ if __name__ == "__main__":
             "wake_vad_threshold": 0.5,
             "wake_verifier": "",
             "wake_audio_dump": False,
+            "wake_confirm": 0.7,
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],

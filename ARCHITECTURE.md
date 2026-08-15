@@ -909,7 +909,25 @@ companion — keep them in sync.
     False — nothing matched at all) toasts "No match" ONCE and returns to
     SLEEPING immediately. A partial-good chain returns True from `try_match`
     (see "Chains partial-execute") and never reaches this path, so its
-    per-segment toasts are unaffected.
+    per-segment toasts are unaffected. EXCEPTION for an unconfirmed audio
+    wake — see "Audio-wake text confirmation" below.
+  - **Audio-wake text confirmation (s34):** config `wake_confirm` (fuzzy
+    threshold 0–1, default 0.7; 0 disables). An AUDIO wake acks on sound
+    before any transcript exists, so it is *provisional*: the listener sets
+    an `audio_wake_unconfirmed` flag on fire and clears it the moment
+    whisper's text confirms the wake — either `is_wake_only`, a command
+    match, or `detector.fuzzy_check(text, threshold)` finding the wake word.
+    If instead the first final is a total miss whose text carries NO wake
+    word (fuzzy), OR the command window simply expires with the flag still
+    set, the wake was a FALSE FIRE: the listener sleeps SILENTLY, suppressing
+    the "No match" toast the rule above would otherwise fire. Zero added
+    latency — the ack already happened; only a phantom's revert is deferred.
+    A TEXT wake carries the wake word by construction, so the flag is never
+    set for it and its misses still nag normally. Trades the occasional
+    silenced phantom against a missed real wake when whisper badly mangles
+    the wake word ("computer"→"peter", ~0.6, below 0.7) — `wake_confirm`
+    tunes where that line sits; `fuzzy_check` lives in `core/wake.py`
+    (stdlib `difflib`, whole-word-then-fuzzy).
   - **Per-segment chains (s30):** recognizers advertise
     `per_segment_finals` (True on WhisperRecognizer, False on Vosk).
     When True, a successful match KEEPS the listener in LISTENING with
@@ -972,7 +990,10 @@ companion — keep them in sync.
   lower gate asks it to rule on frames outside its training distribution.
   Compare a verified score against an unverified one — different quantities
   from different models. Let a failed verifier load reach the listener's
-  text-wake degrade. Commit a `.pkl` to the repo.
+  text-wake degrade. Commit a `.pkl` to the repo. Apply `wake_confirm`'s
+  silent-revert to a TEXT wake (it is self-confirmed; silencing its misses
+  would hide real failures). Forget to clear `audio_wake_unconfirmed` on any
+  LISTENING exit — a leaked flag would silence a later genuine miss.
 
 ### Wake-word matching is whole-word, not substring
 - **What:** `WakeWordDetector.check()` (`core/wake.py`) matches each wake word on

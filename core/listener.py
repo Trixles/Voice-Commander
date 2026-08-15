@@ -286,6 +286,14 @@ def run_listener(
     wake_dump_dir = commands.get_wake_audio_dump_dir()
     wake_ring = wake_dump.WakeAudioRing() if wake_dump_dir else None
 
+    # Text-confirmation of audio wakes (0 disables). The audio engine acks on
+    # sound; a phantom fire is then caught when whisper's transcript neither
+    # contains the wake word nor matches a command -> sleep silently instead
+    # of nagging "No match". Only audio wakes are provisional; a text wake
+    # already carries the wake word, so it is confirmed by construction.
+    confirm_threshold = commands.get_wake_confirm()
+    audio_wake_unconfirmed: bool = False
+
     command_window_start: float = 0.0
     command_window: int = commands.get_command_window()
     confirm_start: float = 0.0
@@ -319,6 +327,14 @@ def run_listener(
                     # ran out of follow-ups. That's success, not a miss --
                     # no toast.
                     print("[listener] Chain window closed, back to sleep.")
+                    set_state(State.SLEEPING)
+                elif audio_wake_unconfirmed:
+                    # Audio wake that whisper never confirmed -- a phantom that
+                    # produced no transcript at all. Sleep SILENTLY; nagging
+                    # "No match" for a fire the user never caused is the exact
+                    # annoyance this feature exists to kill.
+                    print("[listener] Audio wake unconfirmed (silent), back to sleep.")
+                    audio_wake_unconfirmed = False
                     set_state(State.SLEEPING)
                 else:
                     print("[listener] Command window expired, back to sleep.")
@@ -403,6 +419,8 @@ def run_listener(
             if fired:
                 command_window = commands.get_command_window()
                 matched_since_wake = False
+                # Provisional until whisper's transcript confirms it (below).
+                audio_wake_unconfirmed = confirm_threshold > 0
                 # Score goes to the JOURNAL only -- a false fire and a genuine
                 # wake look identical without it (s33 spent a day blind), but
                 # it's diagnostic noise in the user-facing Settings log, which
@@ -536,11 +554,15 @@ def run_listener(
             # real command -- do NOT toast "No match". Refresh the window so
             # the user gets the full command window from this acknowledgement.
             if detector.is_wake_only(text):
+                # The wake word, transcribed -- a real wake. Confirms an audio
+                # fire; keep listening for the command.
+                audio_wake_unconfirmed = False
                 print("[listener] Wake-only utterance, still listening.")
                 command_window_start = now
                 continue
 
             if _is_open_mic_command(text):
+                audio_wake_unconfirmed = False
                 set_state(State.OPEN_MIC)
                 _notify_general("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
                 print("[listener] -> OPEN_MIC")
@@ -548,6 +570,8 @@ def run_listener(
                 continue
 
             if commands.try_match(text, gui_env, context):
+                # A command ran -- unambiguously a real wake.
+                audio_wake_unconfirmed = False
                 if context.pending_confirm:
                     enter_confirming(State.LISTENING, now)
                 elif per_segment:
@@ -560,6 +584,17 @@ def run_listener(
                 else:
                     print("[listener] Command matched, back to sleep.")
                     set_state(State.SLEEPING)
+            elif audio_wake_unconfirmed and not detector.fuzzy_check(text, confirm_threshold):
+                # Total miss on a still-unconfirmed AUDIO wake, and whisper's
+                # text carries no wake word either -> this was a false fire.
+                # Sleep SILENTLY: no wrong command ran, and the user never
+                # caused it, so "No match" would just be noise. A real wake
+                # whose command simply didn't match DOES carry the wake word,
+                # so it clears the flag above (fuzzy_check) and falls to the
+                # normal "No match" toast below.
+                audio_wake_unconfirmed = False
+                print(f"[listener] Audio wake unconfirmed by text '{text}' (silent).")
+                set_state(State.SLEEPING)
             else:
                 # Total miss -- nothing in the utterance matched (a partial
                 # chain that matched >=1 segment returns True above and never
@@ -571,6 +606,7 @@ def run_listener(
                 # commands._notify_nomatch. Without it the user only learns
                 # that something failed, not which mishearing to write an
                 # override for -- and the two paths read inconsistently.
+                audio_wake_unconfirmed = False
                 print("[listener] No match, back to sleep.")
                 _notify_general("No match", f"'{text}'", gui_env=gui_env)
                 log(f"No match: '{text}'")

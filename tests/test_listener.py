@@ -634,3 +634,97 @@ def test_no_dump_when_capture_disabled(monkeypatch):
         wake_engine=eng,
     )
     assert calls == []
+
+
+# -- Audio-wake text confirmation (wake_confirm) ------------------------------
+
+def test_audio_phantom_with_no_wake_word_sleeps_silently(monkeypatch):
+    # Audio fires; whisper hears junk with no wake word and nothing matches.
+    # That is a false fire -> silent sleep, NO "No match" toast.
+    monkeypatch.setattr(commands, "get_wake_confirm", lambda: 0.7)
+    eng = FakeWakeEngine(fires=[True, False])
+    r = run_machine(
+        [RecognizerEvent("final", "okay"), RecognizerEvent("final", "")],
+        monkeypatch,
+        wake_engine=eng,
+        try_match=lambda t: False,
+    )
+    assert not any("No match" in n[0] for n in r["notifications"])
+
+
+class _Clock:
+    """Deterministic monotonic clock: each call jumps far enough past any
+    command window to force expiry on the next loop iteration."""
+    def __init__(self):
+        self.t = 0.0
+    def __call__(self):
+        self.t += 100.0
+        return self.t
+
+
+def test_audio_phantom_by_expiry_sleeps_silently(monkeypatch):
+    # THE dominant real phantom: a cough makes no speech, so whisper never
+    # emits a confirming final; the flag rides until the command window
+    # EXPIRES. That expiry path must be silent too. None events don't refresh
+    # the window, and the fake clock leaps past it on the next iteration.
+    monkeypatch.setattr(commands, "get_wake_confirm", lambda: 0.7)
+    monkeypatch.setattr(listener.time, "time", _Clock())
+    eng = FakeWakeEngine(fires=[True, False])
+    r = run_machine(
+        [None, None],
+        monkeypatch,
+        wake_engine=eng,
+    )
+    assert not any("No match" in n[0] for n in r["notifications"])
+
+
+def test_audio_wake_with_command_dispatches(monkeypatch):
+    # A command match confirms the wake -> dispatched, no silent revert.
+    eng = FakeWakeEngine(fires=[True, False])
+    r = run_machine(
+        [RecognizerEvent("final", "open firefox"), RecognizerEvent("final", "")],
+        monkeypatch,
+        wake_engine=eng,
+        try_match=lambda t: t == "open firefox",
+    )
+    assert "open firefox" in r["matched"]
+    assert not any("No match" in n[0] for n in r["notifications"])
+
+
+def test_audio_wake_with_wake_word_but_bad_command_still_nags(monkeypatch):
+    # "computer <gibberish>" carries the wake word -> a confirmed real wake.
+    # A total miss there SHOULD still toast "No match" (the user woke it).
+    monkeypatch.setattr(commands, "get_wake_confirm", lambda: 0.7)
+    eng = FakeWakeEngine(fires=[True, False])
+    r = run_machine(
+        [RecognizerEvent("final", "computer do a barrel roll"),
+         RecognizerEvent("final", "")],
+        monkeypatch,
+        wake_engine=eng,
+        try_match=lambda t: False,
+    )
+    assert any("No match" in n[0] for n in r["notifications"])
+
+
+def test_wake_confirm_disabled_restores_nagging(monkeypatch):
+    # wake_confirm=0 -> the whole check is off; a phantom nags like before.
+    monkeypatch.setattr(commands, "get_wake_confirm", lambda: 0.0)
+    eng = FakeWakeEngine(fires=[True, False])
+    r = run_machine(
+        [RecognizerEvent("final", "okay"), RecognizerEvent("final", "")],
+        monkeypatch,
+        wake_engine=eng,
+        try_match=lambda t: False,
+    )
+    assert any("No match" in n[0] for n in r["notifications"])
+
+
+def test_text_wake_miss_still_nags(monkeypatch):
+    # A TEXT wake (no audio engine) is self-confirmed; a miss must still
+    # toast "No match" -- the confirm feature must not silence text wakes.
+    r = run_machine(
+        [RecognizerEvent("final", "computer"), RecognizerEvent("final", "nonsense")],
+        monkeypatch,
+        try_match=lambda t: False,
+    )
+    assert any("No match" in n[0] for n in r["notifications"])

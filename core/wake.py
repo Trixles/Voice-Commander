@@ -7,11 +7,12 @@ Whole-word check against the list of wake words on Vosk-transcribed text.
 Matching is on word boundaries, NOT raw substrings: the wake word "computer"
 wakes on "computer" but NOT on "computerized" (which merely embeds it).
 
-Stdlib only (`re`) -- no PySide6, no Vosk. The module is pure logic with a
-pure-logic test suite (tests/test_wake.py); keep it that way.
+Stdlib only (`re`, `difflib`) -- no PySide6, no Vosk. The module is pure
+logic with a pure-logic test suite (tests/test_wake.py); keep it that way.
 """
 
 import re
+from difflib import SequenceMatcher
 
 
 class WakeWordDetector:
@@ -49,6 +50,30 @@ class WakeWordDetector:
         """True if any wake word occurs as a whole word in text."""
         t = text.lower()
         return any(p.search(t) for p in self._patterns)
+
+    def fuzzy_check(self, text: str, threshold: float = 0.7) -> bool:
+        """True if `text` contains a wake word within fuzzy tolerance.
+
+        An exact whole-word match (see `check`) always passes. Otherwise a
+        same-length token window is slid across the text and accepted if any
+        window is at least `threshold` similar to a wake word (difflib
+        ratio, 0-1). This is the text-confirmation of an audio wake: whisper
+        near-mishearings ("compute", "commuter") still confirm, while a wild
+        mangling ("peter" for "computer", ~0.6) stays below a sane threshold
+        and is treated as "didn't actually say it". `threshold <= 0`
+        disables the fuzzy step, leaving only the exact check."""
+        if self.check(text):
+            return True
+        if threshold <= 0:
+            return False
+        tokens = text.lower().split()
+        for w in self.wake_words:
+            n = len(w.split())
+            for i in range(len(tokens) - n + 1):
+                window = " ".join(tokens[i:i + n])
+                if SequenceMatcher(None, window, w).ratio() >= threshold:
+                    return True
+        return False
 
     def is_wake_only(self, text: str) -> bool:
         """True iff `text` contains a wake word and nothing else of substance.

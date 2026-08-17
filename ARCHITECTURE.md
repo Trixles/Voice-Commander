@@ -65,11 +65,16 @@ companion — keep them in sync.
 - **What:** `core/recognizer.py` is the only place that touches a speech
   engine. Contract: a recognizer's `feed(bytes)` takes 16kHz s16 mono PCM
   and returns a `RecognizerEvent(kind, text)` — `"partial"` (streaming
-  mid-utterance text), `"final"` (end-of-utterance transcription), or
+  mid-utterance text), `"final"` (end-of-utterance transcription),
   `"speech"` (voice activity with no text, from batch backends without
   partials; refreshes the LISTENING inactivity window, ignored
-  elsewhere) — or `None` when the backend has nothing to report for
-  that chunk (batch backends buffering; Vosk never returns None).
+  elsewhere), or `"error"` (transcription FAILED — `text` is the failure
+  message, not user speech; `WhisperRecognizer` emits it when the server
+  is unreachable so the listener can warn the user LOUDLY that
+  transcription is down instead of the audio-wake silent-revert hiding a
+  real outage as a phantom; Vosk, being local, never emits it) — or
+  `None` when the backend has nothing to report for that chunk (batch
+  backends buffering; Vosk never returns None).
   `WhisperRecognizer` does VAD-driven segmentation with injected
   collaborators (`vad(chunk)->bool`, `transcribe(pcm)->str`): buffers
   speech plus one pre-roll and one tail chunk (word edges never align

@@ -33,8 +33,8 @@ SAMPLE_RATE = 16000
 
 @dataclass(frozen=True)
 class RecognizerEvent:
-    kind: str  # "partial" | "final" | "speech"
-    text: str
+    kind: str  # "partial" | "final" | "speech" | "error"
+    text: str  # for "error", the failure message (not user text)
 
 
 # -- Whisper output cleanup ----------------------------------------------------
@@ -157,13 +157,17 @@ class WhisperRecognizer:
         try:
             raw = self._transcribe(pcm)
         except Exception as e:
-            # Server down/unreachable: drop THIS segment loudly but keep
-            # the recognizer alive -- an exception escaping feed() kills
-            # the listener thread and leaves the app deaf with a healthy
-            # tray icon. systemd is restarting the server (Restart=
-            # on-failure); the next segment gets a fresh chance.
+            # Server down/unreachable: drop THIS segment but keep the
+            # recognizer alive -- an exception escaping feed() kills the
+            # listener thread and leaves the app deaf with a healthy tray
+            # icon. systemd is restarting the server (Restart=on-failure);
+            # the next segment gets a fresh chance. Surface it as an
+            # "error" event (not None) so the listener can warn the user
+            # LOUDLY that transcription is down -- otherwise the audio-wake
+            # silent-revert hides a real outage as if every wake were a
+            # phantom (the ggml-0.20 breakage, 2026-08-17).
             print(f"[recognizer] transcribe failed, segment dropped: {e}")
-            return None
+            return RecognizerEvent(kind="error", text=str(e))
         text = _clean_whisper_text(raw)
         if not text:
             return None

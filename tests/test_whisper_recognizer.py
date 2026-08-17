@@ -170,11 +170,12 @@ def test_apostrophes_survive_cleanup():
     assert finals[0].text == "what's playing"
 
 
-def test_transcribe_failure_drops_segment_and_keeps_running():
+def test_transcribe_failure_emits_error_event_and_keeps_running():
     # whisper-server down mid-session: transcribe raises. The segment is
-    # LOST (acceptable) but feed() must return None and the recognizer
-    # must keep working -- an exception here propagates into the listener
-    # thread and kills listening app-wide with no visible symptom.
+    # LOST (acceptable) but feed() must NOT raise -- an exception here
+    # propagates into the listener thread and kills listening app-wide with
+    # no visible symptom. It now returns an "error" event (not None) so the
+    # listener can warn the user the backend is down; segment 2 recovers.
     calls = {"n": 0}
 
     def flaky_transcribe(pcm):
@@ -188,6 +189,9 @@ def test_transcribe_failure_drops_segment_and_keeps_running():
 
     rec = WhisperRecognizer(vad=lambda c: vad_script.pop(0), transcribe=flaky_transcribe)
     events = [rec.feed(CHUNK) for _ in range(10)]
+    errors = [e for e in events if e and e.kind == "error"]
     finals = [e for e in events if e and e.kind == "final"]
-    # Segment 1 dropped without raising; segment 2 transcribed fine.
+    # Segment 1 surfaced as an error carrying the failure message (not None,
+    # not a raise); segment 2 transcribed fine.
+    assert len(errors) == 1 and "connection refused" in errors[0].text
     assert finals == [RecognizerEvent(kind="final", text="open firefox")]

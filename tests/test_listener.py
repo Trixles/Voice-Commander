@@ -719,6 +719,37 @@ def test_wake_confirm_disabled_restores_nagging(monkeypatch):
     assert any("No match" in n[0] for n in r["notifications"])
 
 
+def test_transcription_failure_warns_loudly_once(monkeypatch):
+    # An "error" event (whisper-server down) must toast LOUDLY via _notify
+    # (un-silenceable), and only ONCE across repeated failures -- not once
+    # per dropped segment.
+    r = run_machine(
+        [RecognizerEvent("error", "connection refused"),
+         RecognizerEvent("error", "connection refused"),
+         RecognizerEvent("error", "connection refused")],
+        monkeypatch,
+    )
+    warns = [(n, src) for n, src in
+             zip(r["notifications"], r["notification_sources"])
+             if "Transcription unavailable" in n[0]]
+    assert len(warns) == 1                    # once, not per segment
+    assert warns[0][1] == "_notify"           # un-silenceable, not _notify_general
+
+
+def test_transcription_recovery_rearms_the_warning(monkeypatch):
+    # After recovery (a real final), a NEW outage warns again -- the flag
+    # must re-arm, not stay latched.
+    r = run_machine(
+        [RecognizerEvent("error", "down"),           # outage 1 -> warn
+         RecognizerEvent("final", "open firefox"),   # recovers
+         RecognizerEvent("error", "down again")],    # outage 2 -> warn again
+        monkeypatch,
+        try_match=lambda t: True,
+    )
+    warns = [n for n in r["notifications"] if "Transcription unavailable" in n[0]]
+    assert len(warns) == 2
+
+
 def test_text_wake_miss_still_nags(monkeypatch):
     # A TEXT wake (no audio engine) is self-confirmed; a miss must still
     # toast "No match" -- the confirm feature must not silence text wakes.

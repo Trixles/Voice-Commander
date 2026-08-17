@@ -294,6 +294,13 @@ def run_listener(
     confirm_threshold = commands.get_wake_confirm()
     audio_wake_unconfirmed: bool = False
 
+    # Transcription-health warning. A dead whisper-server makes every wake
+    # go unconfirmed and silently revert -- indistinguishable from phantoms,
+    # so an outage looks like a stone-dead app with no feedback (lived it on
+    # 2026-08-17). The recognizer now reports failures as "error" events;
+    # warn LOUDLY once per outage and re-arm on recovery.
+    transcription_down: bool = False
+
     command_window_start: float = 0.0
     command_window: int = commands.get_command_window()
     confirm_start: float = 0.0
@@ -454,6 +461,22 @@ def run_listener(
             # engine still buffering). Vosk never does this; Whisper will.
             continue
 
+        if event.kind == "error":
+            # Transcription failed (whisper-server down/unreachable). Warn
+            # LOUDLY and ONCE per outage -- bare _notify so the Options-tab
+            # toggle can't silence "your app can't hear you". This is
+            # separate from the audio-wake silent-revert on purpose: the
+            # revert stays quiet for genuine phantoms, while THIS names the
+            # real cause so an outage never looks like a dead app again.
+            if not transcription_down:
+                transcription_down = True
+                print(f"[listener] Transcription unavailable: {event.text}")
+                _notify("Transcription unavailable",
+                        "whisper-server isn't responding -- check the journal.",
+                        gui_env=gui_env)
+                log("Transcription unavailable")
+            continue
+
         if event.kind == "speech":
             # Voice activity from a backend with no streaming partials
             # (Whisper). No text to wake on or match yet -- the only job is
@@ -507,6 +530,13 @@ def run_listener(
 
         if not text:
             continue
+
+        if transcription_down:
+            # A final arrived -> whisper answered -> the outage is over.
+            # Re-arm so the NEXT outage warns again.
+            transcription_down = False
+            print("[listener] Transcription restored.")
+            log("Transcription restored")
 
         # Hallucination filter: drop bare-stopword results from background noise.
         if text in _HALLUCINATION_STOPWORDS:

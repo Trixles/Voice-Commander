@@ -1,13 +1,13 @@
 """
 core/overrides.py
 =================
-User-editable Vosk mishearing overrides.
+User-editable transcription mishearing overrides.
 
 Overrides are pre-match string rewrites applied to transcribed text BEFORE
 the matcher sees it. They fill the precision niche in the matching pipeline:
 
     Overrides (precision)  -- user-controlled, deterministic rewrites for
-                              consistent, observable Vosk mishearings.
+                              consistent, observable recognizer mishearings.
     Fuzzy matcher (recall) -- forgives minor near-misses automatically.
 
 The matcher is intentionally conservative; overrides are how the user (and
@@ -37,23 +37,27 @@ import re
 
 
 # -- Factory defaults --------------------------------------------------------
-# Shipped with every install. Greyed-out, locked, undeletable in the UI.
-# Match the historical hardcoded rules in core/listener.py._normalize() that
-# pre-date the user-facing override system. "the " prefix strip is excluded
-# (lives in listener.py as a hallucination filter, not a mishearing fix).
+# Shipped defaults are rewrites we ship pre-enabled with every install
+# (greyed-out, locked, undeletable in the UI). They ORIGINATED as fixes for
+# Vosk's specific mishearing profile.
 #
-# Adding a new default here: append to the list. Removing one would be a
-# breaking change for users who depend on it -- prefer leaving stale defaults
-# in place over removing them.
-
-DEFAULT_OVERRIDES: list[dict] = [
-    {"pattern": "moved to", "replacement": "move to"},
-    {"pattern": "up and",   "replacement": "open"},
-    {"pattern": "hope in",  "replacement": "open"},
-    {"pattern": "oh been",  "replacement": "open"},
-    {"pattern": "cause",    "replacement": "close"},
-    {"pattern": "mike",     "replacement": "mic"},
-]
+# EMPTIED for the whisper build (2026-08-26). Whisper has a different error
+# profile, so the Vosk-era rules may no longer be needed. Rather than ship
+# stale rewrites on a hunch, we ship ZERO defaults and let real whisper use
+# prove which (if any) are still required -- testing from a sterile
+# environment, then adding back only what earns its place. The old Vosk-era
+# set is preserved below, commented out, for easy revival.
+#
+# To re-ship a default: move its row out of the backup block into the list.
+#
+# --- Vosk-era defaults, removed 2026-08-26. Re-add above if whisper needs them:
+#     {"pattern": "moved to", "replacement": "move to"},
+#     {"pattern": "up and",   "replacement": "open"},
+#     {"pattern": "hope in",  "replacement": "open"},
+#     {"pattern": "oh been",  "replacement": "open"},
+#     {"pattern": "cause",    "replacement": "close"},
+#     {"pattern": "mike",     "replacement": "mic"},
+DEFAULT_OVERRIDES: list[dict] = []
 
 # Pattern strings of defaults, for "is this a default?" checks in the UI.
 DEFAULT_PATTERNS: set[str] = {o["pattern"] for o in DEFAULT_OVERRIDES}

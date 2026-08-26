@@ -37,6 +37,33 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture
+def synthetic_defaults():
+    """The whisper build ships an EMPTY DEFAULT_OVERRIDES, but the
+    enable/disable-a-shipped-default MECHANISM still needs coverage. Inject a
+    synthetic default set IN PLACE and restore afterwards.
+
+    In place matters: core.commands and the Overrides tab both did
+    `from core.overrides import DEFAULT_OVERRIDES`, so they hold references to
+    the SAME list object. Mutating that object's contents (`[:] = ...`) is
+    visible everywhere; rebinding the name would not be. This tests the
+    mechanism without depending on which rules actually ship.
+    """
+    import core.overrides as ov
+
+    fixture = [
+        {"pattern": "mike",    "replacement": "mic"},
+        {"pattern": "cause",   "replacement": "close"},
+        {"pattern": "hope in", "replacement": "open"},
+    ]
+    saved = list(ov.DEFAULT_OVERRIDES)
+    ov.DEFAULT_OVERRIDES[:] = fixture
+    try:
+        yield fixture
+    finally:
+        ov.DEFAULT_OVERRIDES[:] = saved
+
+
 def _toggle_of(container, pattern):
     for row in container._default_rows:
         if row._pattern_value == pattern:
@@ -44,7 +71,7 @@ def _toggle_of(container, pattern):
     raise AssertionError(f"no default row with pattern {pattern!r}")
 
 
-def test_disabled_defaults_roundtrip(qapp):
+def test_disabled_defaults_roundtrip(qapp, synthetic_defaults):
     user = [{"pattern": "reboot now", "replacement": "restart"}]
     c1 = OverridesContainer(user, disabled_default_patterns=[])
 
@@ -71,7 +98,7 @@ def test_disabled_defaults_roundtrip(qapp):
     assert c2.collect_disabled_defaults() == ["mike"]
 
 
-def test_get_overrides_filters_disabled(qapp):
+def test_get_overrides_filters_disabled(qapp, synthetic_defaults):
     saved_config = commands._config
     try:
         commands._config = {
@@ -96,7 +123,7 @@ def test_get_overrides_filters_disabled(qapp):
         commands._config = saved_config
 
 
-def test_user_override_wins_conflict_and_disable_frees_pattern():
+def test_user_override_wins_conflict_and_disable_frees_pattern(synthetic_defaults):
     """User-first precedence: a user rule beats a colliding enabled default.
     And disabling a default frees both its before- and after-phrases for
     reuse (the scenario Tyler asked us to cover)."""

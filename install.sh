@@ -340,14 +340,17 @@ install_wakeword_models() {
 
     # Community "computer" model (drop-in dir: users can add any oww .onnx
     # and pick it via the wake_model config key / future GUI dropdown).
+    # VENDORED in-repo (wakewords/, MIT — see wakewords/ATTRIBUTION.md) and
+    # copied from there, NOT downloaded: a fresh install stays hermetic
+    # instead of depending on a third party's repo staying online/unchanged.
     local wake_model="${DATA_DIR}/wakewords/computer_v2.onnx"
+    local wake_model_src="${REPO_DIR}/wakewords/computer_v2.onnx"
     if [[ -f "${wake_model}" ]]; then
-        ok "Wake model already present, skipping download."
+        ok "Wake model already present, skipping (user selection preserved)."
     else
-        info "Downloading 'computer' wake model (~200 KB)..."
-        curl -fsL -o "${wake_model}" \
-            "https://raw.githubusercontent.com/fwartner/home-assistant-wakewords-collection/main/en/computer/computer_v2.onnx" \
-            || die "Failed to download wake model."
+        [[ -f "${wake_model_src}" ]] || die "Vendored wake model missing: ${wake_model_src}"
+        info "Installing 'computer' wake model from repo..."
+        cp "${wake_model_src}" "${wake_model}" || die "Failed to copy wake model."
         ok "Wake model installed."
     fi
 

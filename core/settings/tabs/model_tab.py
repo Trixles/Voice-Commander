@@ -86,8 +86,8 @@ def build(dialog: "SettingsDialog") -> QWidget:
     cl.addSpacing(12)
 
     dl_blurb = QLabel(
-        'Download models:<br><a href="https://huggingface.co/ggerganov/whisper.cpp" '
-        'style="color: #89b4fa;">huggingface.co/ggerganov/whisper.cpp</a>'
+        'Download models:<br><a href="https://huggingface.co/ggerganov/whisper.cpp/tree/main" '
+        'style="color: #89b4fa;">huggingface.co/ggerganov/whisper.cpp/tree/main</a>'
     )
     dl_blurb.setWordWrap(True)
     dl_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px;")

@@ -395,7 +395,7 @@ def load_config() -> None:
         data["commands"] = _default_commands()
         # Seed default wake words on fresh install if not already set.
         if "wake_words" not in data and "wake_word" not in data:
-            data["wake_words"] = ["computer", "hey dude"]
+            data["wake_words"] = ["hey dude"]
         real_path = os.path.realpath(CONFIG_PATH)
         with open(real_path, "w") as f:
             json.dump(data, f, indent=2)

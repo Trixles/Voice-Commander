@@ -92,6 +92,7 @@ from core.settings.tabs.displays_tab import MonitorRow, build as build_displays_
 from core.settings.tabs.model_tab import build as build_model_tab
 from core.settings.tabs.log_tab import build as build_log_tab, _colorize_log_line
 from core.settings.tabs.options_tab import build as build_options_tab
+from core.wake import custom_wake_words
 from core.settings.helpers import (
     _HIDDEN_COMMANDS,
     _load_config, _write_config,
@@ -128,10 +129,10 @@ class SettingsDialog(QDialog):
 
         # Snapshot restart-requiring values at dialog open for change detection.
         ww = self._config.get("wake_words")
-        if isinstance(ww, list):
-            self._orig_wake_words = ", ".join(ww)
+        if isinstance(ww, list) and ww:
+            self._orig_wake_words = ", ".join(custom_wake_words(ww))
         else:
-            self._orig_wake_words = self._config.get("wake_word", "computer")
+            self._orig_wake_words = ""
         self._orig_model_path = get_whisper_model_path()
 
         self._orig_notifications = self._config.get("notifications", True)
@@ -562,10 +563,8 @@ class SettingsDialog(QDialog):
 
         new_config = dict(self._config)
         raw_wake = self._wake_edit.text()
-        wake_words = [w.strip().lower() for w in raw_wake.split(",") if w.strip()]
-        if wake_words:
-            new_config["wake_words"] = wake_words
-            new_config.pop("wake_word", None)
+        new_config["wake_words"] = custom_wake_words(raw_wake.split(","))
+        new_config.pop("wake_word", None)
 
         # Merge UI-collected commands with hidden commands from old config.
         # `commands` already includes _PINNED_SLOT (set_volume, move_to_monitor)

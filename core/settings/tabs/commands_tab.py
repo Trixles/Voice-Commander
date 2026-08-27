@@ -40,6 +40,7 @@ from core.commands import (
     sanitize_phrase_text, dedupe_phrase_text, find_cross_collision,
 )
 from core.env import blur_compositing_available
+from core.wake import custom_wake_words
 from core.settings.helpers import (
     APP_ACTION_KEY, URL_ACTION_KEY, FILE_ACTION_KEY, SHELL_ACTION_KEY, NO_PATH_TEXT,
     _ACTION_LABELS, _CONFIRM_ACTIONS, _CONFIRM_NOTE, _HIDDEN_COMMANDS,
@@ -1057,8 +1058,9 @@ def build(dialog: "SettingsDialog") -> QWidget:
     tab, cl = dialog._make_scroll_tab()
     cl.addWidget(_section_label("Wake Words"))
     wake_blurb = QLabel(
-        "Words or phrases that will wake Voice Commander from sleep to listen for commands. "
-        "Separate multiple words or phrases with commas."
+        'Say "computer" to wake Voice Commander from sleep to listen for commands. '
+        'You can also add custom wake words below, but they will be slightly slower '
+        'to activate than using "computer". Separate multiple words or phrases with commas.'
     )
     wake_blurb.setWordWrap(True)
     wake_blurb.setStyleSheet("color: #a6adc8; font-size: 9pt; padding: 0 4px 4px 4px;")
@@ -1068,19 +1070,44 @@ def build(dialog: "SettingsDialog") -> QWidget:
     wr = QHBoxLayout(wake_row)
     wr.setContentsMargins(4, 0, 4, 0)
     wr.setSpacing(8)
-    dialog._wake_edit = QLineEdit()
-    existing_words = dialog._config.get("wake_words")
-    if isinstance(existing_words, list) and existing_words:
-        dialog._wake_edit.setText(", ".join(existing_words))
-    else:
-        dialog._wake_edit.setText(dialog._config.get("wake_word", "computer"))
-    dialog._wake_edit.setPlaceholderText("computer")
-    dialog._wake_edit.textChanged.connect(dialog._check_restart_needed)
-    # Fixed width + flanking stretches: the field keeps its size and centers,
-    # matching the command rows below instead of stretching with the window.
-    dialog._wake_edit.setFixedWidth(_USER_ROW_CONTENT_W)
     wr.addStretch(1)
-    wr.addWidget(dialog._wake_edit)
+
+    # One container styled as an input; a greyed, non-interactive "computer"
+    # segment is fused to the left of a borderless line edit that holds ONLY
+    # the custom words. QLineEdit has no locked-prefix support, so the prefix
+    # is a separate label -- never a keystroke-intercepted prefix.
+    fused = QFrame()
+    fused.setFixedWidth(_USER_ROW_CONTENT_W)
+    fused.setStyleSheet(
+        "QFrame { background-color: #282839; border: 1px solid #45475a; "
+        "border-radius: 4px; }"
+    )
+    fl = QHBoxLayout(fused)
+    fl.setContentsMargins(8, 0, 8, 0)
+    fl.setSpacing(0)
+
+    prefix = QLabel("computer")
+    prefix.setStyleSheet("color: #6c7086; border: none; background: transparent;")
+
+    dialog._wake_edit = QLineEdit()
+    dialog._wake_edit.setStyleSheet("border: none; background: transparent; color: #cdd6f4;")
+    dialog._wake_edit.setPlaceholderText("add custom words, comma-separated")
+
+    # Show customs only (custom_wake_words filters the baked-in word out).
+    stored = dialog._config.get("wake_words")
+    if not (isinstance(stored, list) and stored):
+        stored = [dialog._config.get("wake_word", "")]
+    dialog._wake_edit.setText(", ".join(custom_wake_words(stored)))
+
+    def _sync_prefix_comma(text):
+        prefix.setText("computer," if text.strip() else "computer")
+    _sync_prefix_comma(dialog._wake_edit.text())
+    dialog._wake_edit.textChanged.connect(_sync_prefix_comma)
+    dialog._wake_edit.textChanged.connect(dialog._check_restart_needed)
+
+    fl.addWidget(prefix)
+    fl.addWidget(dialog._wake_edit, stretch=1)
+    wr.addWidget(fused)
     wr.addStretch(1)
     cl.addWidget(wake_row)
 

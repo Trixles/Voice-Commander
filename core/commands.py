@@ -592,9 +592,15 @@ def get_whisper_vad_tail_ms() -> int:
 
 def get_whisper_model_path() -> str:
     """Absolute path to the ggml weights whisper-server should load.
-    'whisper_model' is a size name ('base.en', 'small.en', ...)."""
-    name = str(_config.get("whisper_model", "base.en")).strip() or "base.en"
-    return os.path.join(_MODELS_DIR, "whisper", f"ggml-{name}.bin")
+
+    'whisper_model' is either a size token ('base.en', 'small.en', ...) that
+    derives MODELS_DIR/whisper/ggml-{token}.bin, OR a full filesystem path the
+    user browsed to. A value containing a path separator is treated as a path;
+    anything else is a token."""
+    raw = str(_config.get("whisper_model", "base.en")).strip() or "base.en"
+    if os.sep in raw:
+        return raw
+    return os.path.join(_MODELS_DIR, "whisper", f"ggml-{raw}.bin")
 
 
 def get_vad_model_path() -> str:

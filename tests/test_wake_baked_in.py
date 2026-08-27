@@ -47,3 +47,15 @@ def test_stored_computer_is_deduped_case_insensitively():
         assert commands.get_wake_words() == ["computer", "hey dude"]
     finally:
         commands._config = saved
+
+
+def test_emit_defaults_ships_customs_only():
+    import json
+    import subprocess
+    out = subprocess.run(
+        [sys.executable, "-m", "core.commands", "--emit-defaults"],
+        capture_output=True, text=True, check=True,
+        cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+    ).stdout
+    cfg = json.loads(out)
+    assert cfg["wake_words"] == ["hey dude"]

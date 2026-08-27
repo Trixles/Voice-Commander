@@ -1521,7 +1521,7 @@ if __name__ == "__main__":
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],
-            "wake_words": ["computer", "hey dude"],
+            "wake_words": ["hey dude"],
             "monitors": {},
             "overrides": [],
         }

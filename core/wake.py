@@ -14,6 +14,26 @@ logic with a pure-logic test suite (tests/test_wake.py); keep it that way.
 import re
 from difflib import SequenceMatcher
 
+# The wake word the shipped openWakeWord model (computer_v2) detects. It is
+# structural, not user data: it is always active (audio + text paths) and is
+# prepended to the user's custom wake words. Kept here beside the detector so
+# the module stays pure stdlib and every detector consumer sees one source.
+BAKED_IN_WAKE_WORDS = ["computer"]
+
+
+def custom_wake_words(words: list[str]) -> list[str]:
+    """The user's custom wake words: `words` lowercased/stripped with any
+    baked-in word removed, order preserved. One source of truth for what the
+    Commands-tab field shows, what a save stores, and what get_wake_words
+    appends after the baked-in word."""
+    baked = set(BAKED_IN_WAKE_WORDS)
+    out = []
+    for w in words:
+        s = (w or "").strip().lower()
+        if s and s not in baked:
+            out.append(s)
+    return out
+
 
 class WakeWordDetector:
     def __init__(self, wake_words: list[str]):

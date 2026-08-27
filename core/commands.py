@@ -48,6 +48,7 @@ from core.overrides import DEFAULT_OVERRIDES
 import core.paths as paths
 from core.paths import CONFIG_PATH
 from core.run import run_capture
+from core.wake import BAKED_IN_WAKE_WORDS, custom_wake_words
 
 
 # -- Default mic phrase lists ------------------------------------------------
@@ -484,12 +485,23 @@ def _check_reload(gui_env: dict = None) -> None:
 
 
 def get_wake_words() -> list[str]:
-    if "wake_words" in _config:
-        words = _config["wake_words"]
-        if isinstance(words, list) and words:
-            return [w.lower().strip() for w in words]
-    word = _config.get("wake_word", "computer")
-    return [word.lower().strip()]
+    """Effective wake words: the baked-in word(s) followed by the user's
+    custom words. 'computer' is always present and cannot be removed, so the
+    openWakeWord audio path always has its word; customs are additive. Config
+    stores customs only, but custom_wake_words() still filters a stray
+    'computer' for back-compat with configs written before this was
+    structural; we then dedupe so a repeated custom can't double."""
+    raw = _config.get("wake_words")
+    if not (isinstance(raw, list) and raw):
+        raw = [_config.get("wake_word", "computer")]
+
+    result = list(BAKED_IN_WAKE_WORDS)
+    seen = set(result)
+    for w in custom_wake_words(raw):
+        if w not in seen:
+            result.append(w)
+            seen.add(w)
+    return result
 
 
 def get_command_window() -> int:

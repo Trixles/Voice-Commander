@@ -1,17 +1,18 @@
 """
 core/settings/tabs/overrides_tab.py
 ===================================
-The "Overrides" tab plus its two row widgets:
+The "Overrides" tab plus its row widget:
 
   OverrideRow         -- one pattern -> replacement row, with the arrow
                          column anchored to the row centre via equal-
                          stretch half-widgets (see class docstring). User
-                         rows carry a delete X; default rows carry an
-                         enable/disable toggle.
-  OverridesContainer  -- two sections ("User Overrides" / "System
-                         Overrides"), mirroring the Commands tab: user rows
-                         (with the + Add Override button) above the locked,
-                         toggleable defaults.
+                         rows carry a delete X.
+  OverridesContainer  -- the user's override rows (with the + Add Override
+                         button). Shipped defaults, if any are ever added
+                         back to DEFAULT_OVERRIDES, are applied at runtime by
+                         commands.get_overrides() but are no longer shown or
+                         toggleable here (the System Overrides section was
+                         removed).
 
 `build(dialog)` constructs the tab QWidget and sets
 `dialog._overrides_container`, which SettingsDialog._build_ui wires
@@ -29,11 +30,10 @@ from PySide6.QtWidgets import (
 )
 
 from core.overrides import (
-    DEFAULT_OVERRIDES,
     is_valid as _is_valid_override,
     sanitize as _sanitize_override,
 )
-from core.settings.helpers import ToggleSwitch, _centered_rule, _h_rule, _section_label
+from core.settings.helpers import ToggleSwitch, _h_rule, _section_label
 
 if TYPE_CHECKING:
     from core.settings.dialog import SettingsDialog
@@ -115,7 +115,7 @@ class OverrideRow(QWidget):
         lh.setSpacing(6)
 
         self._pattern_edit = QLineEdit(pattern)
-        self._pattern_edit.setPlaceholderText("what Vosk heard")
+        self._pattern_edit.setPlaceholderText("what Whisper heard")
         self._pattern_edit.setFixedWidth(_FIELD_WIDTH)
         lh.addWidget(self._pattern_edit)
 
@@ -263,21 +263,23 @@ class OverridesContainer(QWidget):
                  disabled_default_patterns: list[str] | None = None, parent=None):
         super().__init__(parent)
         self._user_rows: list[OverrideRow] = []
+        # Shipped defaults are no longer rendered here (System Overrides section
+        # removed); kept as an always-empty list so collect_disabled_defaults()
+        # stays valid. disabled_default_patterns is accepted for call-site
+        # compatibility but has no UI to toggle it now.
         self._default_rows: list[OverrideRow] = []
-        disabled_set = set(disabled_default_patterns or [])
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # ---- User Overrides section ----------------------------------------
-        layout.addWidget(_section_label("User Overrides"))
+        # ---- Overrides section ---------------------------------------------
+        layout.addWidget(_section_label("Overrides"))
         user_blurb = QLabel(
-            "Voice Commander's speech interpretation is powered by Vosk, which "
-            "is extremely lightweight, but also prone to inaccuracies. If the "
-            "interpreter is consistently mishearing a certain word or phrase "
-            "(e.g., it transcribes \"cause\" when you say \"close\"), you can "
-            "create an override rule for it here."
+            "Voice Commander's speech interpretation is quite accurate, but it "
+            "can still mishear now and then. If the interpreter is consistently "
+            "mishearing a certain word or phrase (e.g., it transcribes \"cause\" "
+            "when you say \"close\"), you can create an override rule for it here."
         )
         user_blurb.setWordWrap(True)
         user_blurb.setStyleSheet(self._BLURB_CSS)
@@ -306,48 +308,14 @@ class OverridesContainer(QWidget):
                 continue
             self._append_user_row(OverrideRow(pattern, replacement, is_default=False))
 
-        # ---- System Overrides section --------------------------------------
-        # Real section divider, capped to the content width and centered (like
-        # the Commands tab) so it never runs wider than the rows it borders.
-        # _update_section_rule() hides the last user row's per-row line so this
-        # is the only thing between the two sections.
-        layout.addWidget(_centered_rule(_ROW_CONTENT_W))
-
-        layout.addWidget(_section_label("System Overrides"))
-        sys_blurb = QLabel(
-            "Built-in overrides that cover common mishearings relevant to "
-            "Voice Commander. They can be toggled on or off."
-        )
-        sys_blurb.setWordWrap(True)
-        sys_blurb.setStyleSheet(self._BLURB_CSS)
-        layout.addWidget(sys_blurb)
-
-        self._defaults_layout = QVBoxLayout()
-        self._defaults_layout.setContentsMargins(0, 0, 0, 0)
-        self._defaults_layout.setSpacing(0)
-        for d in DEFAULT_OVERRIDES:
-            enabled = d["pattern"] not in disabled_set
-            row = OverrideRow(d["pattern"], d["replacement"],
-                              is_default=True, enabled=enabled)
-            row.dirtied.connect(self.dirtied)
-            self._default_rows.append(row)
-            self._defaults_layout.addWidget(row)
-        layout.addLayout(self._defaults_layout)
-
         layout.addStretch()
-
-        # The bottom-most default row is the last row in the whole tab, so it
-        # gets no separator line beneath it.
-        if self._default_rows:
-            self._default_rows[-1]._bottom_rule.setVisible(False)
 
         self._update_section_rule()
 
     def _update_section_rule(self) -> None:
-        """Hide the bottom-most user row's per-row separator: the capped section
-        divider beneath the User Overrides section handles the break, so a
-        per-row line there would double up. Re-run on add/remove. (Matches the
-        Commands tab.)"""
+        """Hide the bottom-most user row's per-row separator -- it's the last
+        content before the trailing stretch, so a trailing line would dangle.
+        Re-run on add/remove. (Matches the Commands tab.)"""
         for i, row in enumerate(self._user_rows):
             row._bottom_rule.setVisible(i < len(self._user_rows) - 1)
 

@@ -14,7 +14,6 @@ platform and skips entirely if PySide6 isn't installed. Run from the repo root
 with `pytest -q`.
 """
 
-import json
 import os
 import sys
 
@@ -64,38 +63,16 @@ def synthetic_defaults():
         ov.DEFAULT_OVERRIDES[:] = saved
 
 
-def _toggle_of(container, pattern):
-    for row in container._default_rows:
-        if row._pattern_value == pattern:
-            return row._enable_toggle
-    raise AssertionError(f"no default row with pattern {pattern!r}")
+def test_user_overrides_collect(qapp):
+    """The System Overrides section was removed, so the container renders only
+    user rows. collect() returns them; with no default rows rendered,
+    collect_disabled_defaults() is always empty."""
+    user = [{"pattern": "water fox", "replacement": "waterfox"}]
+    c = OverridesContainer(user, disabled_default_patterns=[])
 
-
-def test_disabled_defaults_roundtrip(qapp, synthetic_defaults):
-    user = [{"pattern": "reboot now", "replacement": "restart"}]
-    c1 = OverridesContainer(user, disabled_default_patterns=[])
-
-    # Everything on at first.
-    assert c1.collect_disabled_defaults() == []
-
-    # Disable two defaults.
-    _toggle_of(c1, "mike").setChecked(False)
-    _toggle_of(c1, "cause").setChecked(False)
-
-    disabled = json.loads(json.dumps(c1.collect_disabled_defaults()))
-    assert set(disabled) == {"mike", "cause"}
-    # User rules collected separately, unaffected by the default toggles.
-    assert c1.collect() == [{"pattern": "reboot now", "replacement": "restart"}]
-
-    # Reload a fresh container from the persisted disabled set.
-    c2 = OverridesContainer(user, disabled_default_patterns=disabled)
-    assert _toggle_of(c2, "mike").isChecked() is False
-    assert _toggle_of(c2, "cause").isChecked() is False
-    assert _toggle_of(c2, "hope in").isChecked() is True   # untouched default
-
-    # Re-enable one, recollect: only the still-off pattern remains.
-    _toggle_of(c2, "cause").setChecked(True)
-    assert c2.collect_disabled_defaults() == ["mike"]
+    assert c.collect() == [{"pattern": "water fox", "replacement": "waterfox"}]
+    # No shipped defaults are rendered, so nothing can be toggled off.
+    assert c.collect_disabled_defaults() == []
 
 
 def test_get_overrides_filters_disabled(qapp, synthetic_defaults):

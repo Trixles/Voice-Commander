@@ -516,7 +516,7 @@ class SettingsDialog(QDialog):
         return True
 
     def _save(self) -> None:
-        old_wake_words  = self._config.get("wake_words", [self._config.get("wake_word", "computer")])
+        old_wake_words  = custom_wake_words(self._config.get("wake_words", [self._config.get("wake_word", "computer")]))
 
         # Strip characters that can't occur in a spoken phrase (braces,
         # punctuation, symbols) BEFORE anything else. This cleans the phrase

@@ -7,7 +7,7 @@ Tab layout (left to right):
   - Commands    : Wake word field, command accordion rows
   - Overrides   : Vosk mishearing rewrite rules (defaults + user rules)
   - Displays    : monitor alias accordion rows
-  - Model       : Vosk model path picker
+  - Model       : Whisper model path picker
   - Log         : live listener output with colour-coded categories
   - Options     : explanatory blurb
 
@@ -19,7 +19,7 @@ via `_tab_reset_map`, disabled with a tooltip on tabs without defaults
 Save behavior:
   - Writes through the symlink to the real file
   - Immediately calls commands.load_config() so changes are live without restart
-  - Wake word and Vosk model changes still require a service restart
+  - Wake word and Whisper model changes still require a service restart
     (detector / model loaded at startup)
   - Dirty-tracked: starts disabled, enables while the form differs from the
     last-saved state, disables again after a successful save OR when every
@@ -73,7 +73,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.commands import (
-    get_vosk_model_path, _default_commands,
+    get_whisper_model_path, _default_commands,
     _build_invalid_chars_message, _build_duplicate_removed_message,
     _build_cross_collision_message,
 )
@@ -94,7 +94,6 @@ from core.settings.tabs.log_tab import build as build_log_tab, _colorize_log_lin
 from core.settings.tabs.options_tab import build as build_options_tab
 from core.settings.helpers import (
     _HIDDEN_COMMANDS,
-    VOSK_MODELS_DIR,
     _load_config, _write_config,
 )
 
@@ -133,10 +132,7 @@ class SettingsDialog(QDialog):
             self._orig_wake_words = ", ".join(ww)
         else:
             self._orig_wake_words = self._config.get("wake_word", "computer")
-        try:
-            self._orig_model_path = get_vosk_model_path()
-        except ValueError:
-            self._orig_model_path = self._config.get("vosk_model", "")
+        self._orig_model_path = get_whisper_model_path()
 
         self._orig_notifications = self._config.get("notifications", True)
         self._orig_match_threshold = self._config.get("match_threshold", 0.75)
@@ -231,7 +227,7 @@ class SettingsDialog(QDialog):
         self._strictness_slider.valueChanged.connect(self._mark_dirty)
         if self._orig_autostart is not None:
             self._autostart_toggle.toggled.connect(self._mark_dirty)
-        # Model picker dirties via _browse_vosk_model -> _check_restart_needed,
+        # Model picker dirties via _browse_whisper_model -> _check_restart_needed,
         # which we extend below to also call _mark_dirty.
 
         # Baseline for revert detection: _mark_dirty compares the live form
@@ -265,30 +261,27 @@ class SettingsDialog(QDialog):
     def _build_model_tab(self) -> QWidget:
         return build_model_tab(self)
 
-    def _browse_vosk_model(self) -> None:
-        chosen = QFileDialog.getExistingDirectory(
+    def _browse_whisper_model(self) -> None:
+        chosen, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Vosk model directory",
-            self._selected_model_path or VOSK_MODELS_DIR,
-            QFileDialog.Option.ShowDirsOnly,
+            "Select a Whisper model file",
+            os.path.dirname(self._selected_model_path) if self._selected_model_path else "",
+            "Whisper models (*.bin)",
         )
         if not chosen:
             return
-
-        if not os.path.isfile(os.path.join(chosen, "am", "final.mdl")):
+        if not (os.path.isfile(chosen) and chosen.endswith(".bin")):
             self._model_error_label.setText(
-                f"That doesn't look like a Vosk model directory (missing am/final.mdl).\n"
-                f"Please select the root folder of a downloaded Vosk model."
+                "That doesn't look like a Whisper model. Pick a ggml-*.bin file."
             )
             self._model_error_label.setVisible(True)
             return
-
         self._model_error_label.setVisible(False)
         self._selected_model_path = chosen
         self._model_path_label.setText(chosen)
         self._check_restart_needed()
         self._mark_dirty()
-        print(f"[settings] Vosk model selected: {chosen}")
+        print(f"[settings] Whisper model selected: {chosen}")
 
     def _build_options_tab(self) -> QWidget:
         return build_options_tab(self)
@@ -604,7 +597,7 @@ class SettingsDialog(QDialog):
         if monitors:
             new_config["monitors"] = monitors
         if self._selected_model_path:
-            new_config["vosk_model"] = self._selected_model_path
+            new_config["whisper_model"] = self._selected_model_path
 
         # Options tab: notifications + recognition strictness are config-backed.
         new_config["notifications"] = self._notifications_toggle.isChecked()
@@ -639,6 +632,12 @@ class SettingsDialog(QDialog):
             print("[settings] Config reloaded into commands module.")
         except Exception as e:
             print(f"[settings] Post-save reload failed: {e}")
+
+        # Publish the (possibly new) model path to the whisper-server unit and
+        # make sure it's running with it. No-op restart when the env file is
+        # unchanged, so calling this unconditionally on every save is safe.
+        import core.whisper_server as whisper_server
+        whisper_server.ensure_server()
 
         if needs_restart:
             print("[settings] Restart-requiring setting changed -- restarting service.")

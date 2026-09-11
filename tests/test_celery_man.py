@@ -150,13 +150,12 @@ def test_command_registered_in_action_registry():
     assert commands.ACTION_REGISTRY.get("celery_man") is apps.celery_man
 
 
-def test_default_system_command_present_and_shaped():
-    cmd = next(c for c in commands._default_system_commands()
-               if c["name"] == "celery_man")
-    assert cmd["action"] == "celery_man"
-    assert cmd["phrases"] == ["load up celery man"]
-    assert cmd["display_name"] == "Celery Man"
-    assert cmd.get("args", {}) == {}  # URL is baked into the action, not args
+def test_celery_man_not_in_default_system_commands():
+    # Ruling s37: the easter egg leaves shipped defaults. Existing configs
+    # keep their row (merge-on-load only ADDS by name, never prunes) and it
+    # still dispatches because the action machinery stays registered.
+    names = [c["name"] for c in commands._default_system_commands()]
+    assert "celery_man" not in names
 
 
 def test_is_last_in_system_command_order():

@@ -299,16 +299,6 @@ def _default_system_commands() -> list[dict]:
         "args": {},
         "confirm": True,
     })
-    commands.append({
-        # The one that started it all. Its own system action bakes in the URL
-        # (not user-editable) and mutes the "computer" wake word for a bit,
-        # since the video says "computer" repeatedly. Last in the system list.
-        "name": "celery_man",
-        "display_name": "Celery Man",
-        "phrases": ["load up celery man"],
-        "action": "celery_man",
-        "args": {},
-    })
     return commands
 
 

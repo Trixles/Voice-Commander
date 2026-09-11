@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **The Vosk speech backend.** whisper.cpp (via `whisper-server`) is now the
+  only recognizer; the `recognizer_backend` and `vosk_model` config keys are
+  gone, along with the installer's Vosk model download and the `vosk` Python
+  dependency. Existing configs that still carry the old keys load fine —
+  unknown keys are ignored, never pruned.
+- **The openWakeWord audio wake engine**, including the speaker verifier,
+  the wake-audio diagnostic dumps, the vendored `computer_v2` wake model,
+  and the `wake_engine` / `wake_model` / `wake_threshold` /
+  `wake_vad_threshold` / `wake_verifier` / `wake_audio_dump` /
+  `wake_confirm` config keys. Text wake (transcript matching, acknowledged
+  on partials) is the wake path. This also drops the openwakeword-only
+  Python dependencies (tqdm, scipy, requests, scikit-learn) and the
+  `unzip` install requirement.
+- **Celery Man left the shipped defaults.** Existing configs keep the
+  command and it still dispatches; fresh installs no longer include it.
+
 ## [1.0.1] &mdash; 2026-07-16
 
 ### Fixed

@@ -2,7 +2,7 @@
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform: KDE Plasma 6](https://img.shields.io/badge/platform-KDE%20Plasma%206%20%2F%20Wayland-1d99f3.svg)
-![Speech: Vosk (offline)](https://img.shields.io/badge/speech-Vosk%20(offline)-success.svg)
+![Speech: whisper.cpp (offline)](https://img.shields.io/badge/speech-whisper.cpp%20(offline)-success.svg)
 
 A voice control app for KDE Plasma 6 on Wayland. Say a wake word, then a
 command, and it does the thing. Create custom commands to open applications, files, or URLs, or run shell code.
@@ -49,10 +49,10 @@ quietly in your system tray and waits for a wake word. Once it hears one, it
 listens for a few seconds for a command (open an app, change the volume,
 move a window to another monitor, that kind of thing) and then does it.
 
-Speech recognition happens entirely on your computer using an open-source
-recognition engine called Vosk. Nothing you say is sent anywhere. The only
+Speech recognition happens entirely on your computer using the open-source
+whisper.cpp engine. Nothing you say is sent anywhere. The only
 time Voice Commander needs the internet at all is during installation, to
-download the recognition model. After that it works completely offline.
+download the recognition models. After that it works completely offline.
 
 Everything is configurable from the settings window, but if you'd rather
 hand-edit the config, it's stored as plain JSON. No fighting a GUI required
@@ -91,9 +91,13 @@ if you don't want to.
 | **Distro** | Works best on Arch-based (CachyOS, Manjaro, etc.) and Debian-based (Debian, Ubuntu, Kubuntu) systems, where the installer can detect the platform and tell you exactly what to install if something's missing. Other distros work fine too, you'll just be installing prerequisites yourself. |
 | **Microphone** | Anything your system can see as a default audio input |
 
+Speech recognition runs through `whisper-server`, which comes from your
+distro's `whisper-cpp` package — the installer warns you if it isn't
+there.
+
 The installer also checks for a handful of command-line tools it depends on
 (`pactl`, `pw-record`, `playerctl`, `kscreen-doctor`, `notify-send`,
-`kwriteconfig6`, `dbus-send`, `xdg-open`, `curl`, `unzip`, `systemctl`) and
+`kwriteconfig6`, `dbus-send`, `xdg-open`, `curl`, `systemctl`) and
 tells you what's missing if any of them aren't already on your system.
 Everything else (the Python side of things) gets installed automatically
 into its own self-contained environment, so it won't touch anything else on
@@ -113,7 +117,7 @@ No root access needed. The installer:
    if you don't.
 2. Copies the app into `~/.local/share/voice-commander/`, along with its
    own isolated Python environment.
-3. Downloads the small speech-recognition model (about 40 MB) if it isn't
+3. Downloads the speech-recognition models (about 150 MB) if they aren't
    already there.
 4. Installs a small helper script that lets Plasma move windows between
    monitors on command.
@@ -169,7 +173,7 @@ longer command or a chain of them doesn't get cut off early.
 
 Whatever it hears next goes through two passes. First, any fixes you've set
 up under Overrides get applied. These catch specific words your mic or
-voice trips Vosk up on, before matching even starts. Then it's compared
+voice trips the recognizer up on, before matching even starts. Then it's compared
 against every command phrase you've configured, using a fuzzy match that
 forgives small mistakes but won't fire on something unrelated just because
 it shares a word with a real command.
@@ -183,8 +187,8 @@ youtube," and both will fire. If part of a chain doesn't get recognized,
 the rest still goes through, and you're told which part didn't.
 
 Everything it hears, matches, or runs gets logged on the Log tab, so you
-can always see exactly what it picked up, which, this being Vosk, is
-sometimes funnier than you'd expect.
+can always see exactly what it picked up, which is sometimes funnier than
+you'd expect.
 
 ## The Settings Window
 
@@ -241,7 +245,7 @@ nothing happened instead of wondering if you mumbled.
 
 ### Overrides
 
-Vosk does a good job, but it's not psychic, and certain words get misheard
+The recognizer does a good job, but it's not psychic, and certain words get misheard
 the same way every time for a given voice and mic. Overrides fix that for
 good: a simple "it heard X, I meant Y" rule that's applied before anything
 gets matched.
@@ -250,7 +254,7 @@ A handful ship by default, covering common mishearings, things like
 correcting "cause" to "close," or "mike" to "mic." You can switch any of
 them off, but not edit or delete them.
 
-Add your own under User Overrides: a word or phrase Vosk tends to mishear,
+Add your own under User Overrides: a word or phrase that tends to get misheard,
 and what you actually meant. Matching only happens on whole words, so a
 rule for "in" won't quietly break "open" or "spin." If something keeps
 getting misheard, check the [Log tab](#log) to see exactly what was
@@ -273,13 +277,13 @@ close) live under [System Commands](#commands) rather than here.
 
 ### Model
 
-Speech recognition is handled by Vosk. The small model installed by
-default is the recommended choice. It won't win any accuracy contests, but
-it's good enough for most commands and barely uses any memory or CPU. If
-you want better accuracy and don't mind the extra resource use, grab a
-[larger model](https://alphacephei.com/vosk/models) and point this tab at
-it. Switching models needs a restart, which the settings window will remind
-you about when you save.
+Speech recognition is handled by [whisper.cpp](https://github.com/ggml-org/whisper.cpp).
+The base English model installed by default is the recommended choice: a
+good accuracy/speed balance for command phrases. If you want to trade in
+either direction, grab a different
+[ggml model](https://huggingface.co/ggerganov/whisper.cpp/tree/main) (the
+tab links there too) and point this tab at it. Switching models needs a
+restart, which the settings window will remind you about when you save.
 
 ### Log
 

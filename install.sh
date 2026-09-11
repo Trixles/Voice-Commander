@@ -94,7 +94,6 @@ declare -A REQUIRED_BINS=(
     [dbus-send]="dbus|dbus-bin"
     [xdg-open]="xdg-utils|xdg-utils"
     [curl]="curl|curl"
-    [unzip]="unzip|unzip"
     [systemctl]="systemd|systemd"
 )
 

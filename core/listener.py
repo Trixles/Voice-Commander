@@ -6,13 +6,13 @@ Audio capture loop and state machine.
 Speech recognition happens behind the seam in core/recognizer.py: the
 entry point (voice_commander.py) passes a recognizer_factory, and this
 loop consumes RecognizerEvents -- it never touches an engine API. Heavy
-engine state (e.g. the Vosk model) is owned by the entry point and
-captured in the factory; mic restarts recreate only the pw-record
+engine state (e.g. the whisper-server wiring) is owned by the entry point
+and captured in the factory; mic restarts recreate only the pw-record
 subprocess and a fresh recognizer from the factory.
 
 State machine:
   SLEEPING   -> LISTENING    wake word heard (acknowledged immediately off a
-                             Vosk partial; or at finalize as a fallback)
+                             streaming partial; or at finalize as a fallback)
   LISTENING  -> SLEEPING     command matched OR command window expired
   LISTENING  -> CONFIRMING   dangerous command matched, awaiting "confirm"
   CONFIRMING -> prev state   cancelled (voice or timeout); -> SLEEPING on confirm
@@ -125,7 +125,7 @@ _CONFIRM_BODY = (
 CHECK_MIC_EVERY = 50
 
 # -- Hallucination filter -----------------------------------------------------
-# Vosk hallucinates short stopwords from background noise. Any of these as the
+# Speech engines hallucinate short stopwords from background noise. Any of these as the
 # *entire* recognized text is dropped before logging or matching. Multi-word
 # results that happen to start or contain these words are unaffected.
 _HALLUCINATION_STOPWORDS = {"the", "a", "an", "uh", "um", "huh", "oh", "and", "i", "to"}
@@ -209,7 +209,7 @@ def wait_for_mic_ready(source: str, timeout: int = 10) -> bool:
 # -- Built-in phrase checks ---------------------------------------------------
 
 def _normalize(text: str) -> str:
-    """Hallucination filter for Vosk transcriptions, applied before matching.
+    """Hallucination filter for transcriptions, applied before matching.
 
     Currently a single rule: strip a leading 'the ', which some mics with
     onboard AGC (notably the ReSpeaker XVF3800) hallucinate from background
@@ -219,12 +219,10 @@ def _normalize(text: str) -> str:
     User-configurable mishearing rewrites live in core/overrides.py and are
     applied separately by the listener loop after this function runs. The
     split is intentional: hallucination filters are plumbing for artifacts
-    the user never said; overrides are 'Vosk heard X, user meant Y'.
+    the user never said; overrides are 'the engine heard X, user meant Y'.
     """
-    # Leading "and ": per-segment chains (whisper backend) deliver "...and
-    # open kate..." as its own segment; the connective is chain glue, not
-    # command text. Harmless under Vosk (a final almost never starts with
-    # a bare connective that isn't chain-related).
+    # Leading "and ": per-segment chains deliver "...and open kate..." as
+    # its own segment; the connective is chain glue, not command text.
     return text.removeprefix("and ").removeprefix("the ")
 
 
@@ -264,8 +262,8 @@ def run_listener(
     recognizer_factory -- zero-arg callable returning a fresh seam-conformant
                           recognizer (see core/recognizer.py). Called once per
                           run_listener invocation, so a mic restart gets a
-                          fresh recognizer while heavy engine state (e.g. the
-                          Vosk model) stays alive inside the factory's closure.
+                          fresh recognizer while heavy engine state stays
+                          alive inside the factory's closure.
     wake_engine_factory -- optional zero-arg callable returning an audio wake
                           engine (core/wakeword.py): feed(chunk) -> fired?.
                           Fed ONLY in SLEEPING; a fire acknowledges the wake
@@ -309,8 +307,8 @@ def run_listener(
     # Batch backends (whisper) deliver each VAD segment of a chain as its
     # OWN final. For those, a successful match must keep LISTENING so the
     # rest of the chain can land -- the inactivity window is the chain's
-    # lifetime. Streaming backends (vosk) get a whole chain in one final
-    # and keep the classic match -> sleep behavior.
+    # lifetime. Streaming backends (whole chain in one final) keep the
+    # classic match -> sleep behavior; the seam default is that shape.
     per_segment = getattr(rec, "per_segment_finals", False)
 
     # A broken wake engine (missing dep, missing model file) must never
@@ -521,7 +519,7 @@ def run_listener(
         event = rec.feed(data)
         if event is None:
             # Backend has nothing to report for this chunk (e.g. a batch
-            # engine still buffering). Vosk never does this; Whisper will.
+            # engine still buffering).
             continue
 
         if event.kind == "error":
@@ -552,8 +550,7 @@ def run_listener(
         if event.kind == "partial":
             # Mid-utterance: the engine has no final text yet, but partials
             # stream live. Two jobs here, both so feedback/timing track
-            # *speech* rather than the end-of-utterance endpoint (~1.5s of
-            # silence for Vosk):
+            # *speech* rather than the end-of-utterance endpoint:
             #
             #  - SLEEPING: the moment a partial contains the wake word,
             #    acknowledge immediately -- fire "Listening...", light the

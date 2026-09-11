@@ -30,7 +30,7 @@ _DEBUG = os.environ.get("VC_DEBUG_MATCHER") == "1"
 # ratio rewards the shared prefix structurally, so we require the *rest* of
 # the strings to clear a lower-but-meaningful bar. Calibrated to reject
 # "open like" vs "open plex" (tail score 0.50) while accepting plausible
-# Vosk garbles like "open plix" vs "open plex" (0.75) and "open dolfen"
+# engine garbles like "open plix" vs "open plex" (0.75) and "open dolfen"
 # vs "open dolphin" (0.62). Don't lower below ~0.55 -- the gap to
 # semantically-unrelated tails narrows fast there.
 TAIL_THRESHOLD = 0.60

@@ -30,7 +30,7 @@ Rules apply in list order; first-match-wins per overlapping pattern.
 
 The "the " prefix hallucination filter is NOT an override -- it stays in
 core/listener.py._normalize() as plumbing, because its mechanism (mic AGC
-artifact) is categorically different from "Vosk heard X, user meant Y".
+artifact) is categorically different from "the engine heard X, user meant Y".
 """
 
 import re
@@ -83,7 +83,7 @@ def _compile(pattern: str) -> re.Pattern:
 def sanitize(pattern: str, replacement: str) -> tuple[str, str]:
     """Normalize a user-entered override row.
 
-    - Lowercase both fields (Vosk emits lowercase; matching is case-blind).
+    - Lowercase both fields (the seam emits lowercase; matching is case-blind).
     - Collapse runs of whitespace to single spaces and trim ends.
     - Empty replacement is allowed (filler-word deletion).
     - Empty pattern is invalid -- caller should reject the row before save.

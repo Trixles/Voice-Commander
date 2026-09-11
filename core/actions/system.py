@@ -18,7 +18,7 @@ from core.run import run_bg, run_capture
 
 
 # -- Volume word-to-int -------------------------------------------------------
-# Vosk transcribes speech as text, so "fifty" arrives as the string "fifty".
+# Speech arrives as words, so "fifty" arrives as the string "fifty".
 # We only need multiples of 5 up to 100.
 
 _WORD_TO_INT: dict[str, int] = {

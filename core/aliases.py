@@ -25,11 +25,12 @@ NUMBER_WORDS = [
 def default_aliases(index_1based: int) -> list[str]:
     """Generate default aliases for a monitor at 1-based index.
     Returns e.g. ["monitor two", "monitor to"] for index 2.
-    Vosk outputs phonetic text only, so numeric aliases are useless."""
+    The recognizer seam normalizes digits to words, so numeric aliases
+    are useless."""
     if index_1based <= len(NUMBER_WORDS):
         word = NUMBER_WORDS[index_1based - 1]
         aliases = [f"monitor {word}"]
-        # Common Vosk mishearing: "two" -> "to"
+        # Common mishearing: "two" -> "to"
         if word == "two":
             aliases.append("monitor to")
         return aliases

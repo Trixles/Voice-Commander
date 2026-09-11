@@ -12,7 +12,7 @@ tests/test_mic_and_blur.py
      settings window goes translucent (blur present) or opaque (the safe
      default), including third-party blur forks.
 
-Pure logic -- no Qt, no Vosk, no subprocess. Run from the repo root:
+Pure logic -- no Qt, no engine, no subprocess. Run from the repo root:
   pytest -q
 """
 

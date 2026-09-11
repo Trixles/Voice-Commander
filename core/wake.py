@@ -3,11 +3,11 @@ core/wake.py
 ============
 Wake word detector.
 
-Whole-word check against the list of wake words on Vosk-transcribed text.
+Whole-word check against the list of wake words on transcribed text.
 Matching is on word boundaries, NOT raw substrings: the wake word "computer"
 wakes on "computer" but NOT on "computerized" (which merely embeds it).
 
-Stdlib only (`re`, `difflib`) -- no PySide6, no Vosk. The module is pure
+Stdlib only (`re`, `difflib`) -- no PySide6, no engine deps. The module is pure
 logic with a pure-logic test suite (tests/test_wake.py); keep it that way.
 """
 

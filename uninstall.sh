@@ -6,7 +6,7 @@
 # voice-commander install is untouched):
 #   - both systemd user units (app + whisper-server; stopped, disabled, deleted)
 #   - the launcher script in ~/.local/bin/
-#   - the app, venv, icons, KWin script, Vosk + Whisper/VAD models
+#   - the app, venv, icons, KWin script, Whisper/VAD models
 #
 # By default, the user's commands.json is PRESERVED. Pass --purge to also
 # delete the config directory.

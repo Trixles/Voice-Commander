@@ -71,10 +71,9 @@ companion — keep them in sync.
   elsewhere), or `"error"` (transcription FAILED — `text` is the failure
   message, not user speech; `WhisperRecognizer` emits it when the server
   is unreachable so the listener can warn the user LOUDLY that
-  transcription is down instead of the audio-wake silent-revert hiding a
-  real outage as a phantom; Vosk, being local, never emits it) — or
+  transcription is down — an outage must never look like a dead app) — or
   `None` when the backend has nothing to report for that chunk (batch
-  backends buffering; Vosk never returns None).
+  backends buffering).
   `WhisperRecognizer` does VAD-driven segmentation with injected
   collaborators (`vad(chunk)->bool`, `transcribe(pcm)->str`): buffers
   speech plus one pre-roll and one tail chunk (word edges never align
@@ -85,17 +84,17 @@ companion — keep them in sync.
   punctuation stripped (apostrophes kept), standalone digits 0-9 →
   words ("monitor 3" → "monitor three"); a segment cleaning to empty
   emits nothing. Event text is ALWAYS
-  stripped and lowercase — per-engine cleanup (Vosk JSON envelopes,
-  Whisper punctuation/caps) lives behind the seam, so the listener,
+  stripped and lowercase — per-engine cleanup (Whisper punctuation/caps)
+  lives behind the seam, so the listener,
   wake check, overrides, and matcher never see engine-specific output.
   `run_listener` takes a `recognizer_factory` (zero-arg callable) rather
   than a model: the factory is called once per listener run, so mic
-  restarts get a fresh recognizer while heavy engine state (the Vosk
-  model) stays loaded in the entry point's closure. `SAMPLE_RATE` (16000)
+  restarts get a fresh recognizer while heavy engine state stays loaded
+  in the entry point's closure. `SAMPLE_RATE` (16000)
   is owned by `core/recognizer.py`; `pw-record`'s invocation reads it
-  from there. Engine imports are deferred inside the concrete classes
-  (`import vosk` inside `VoskRecognizer.__init__`) so an install using
-  one backend never needs the other's package. The state machine is
+  from there. Engine-runtime imports stay deferred inside the concrete
+  classes (onnxruntime/numpy inside `SileroVAD.__init__`) so importing
+  the modules stays cheap and headless-testable. The state machine is
   tested engine-free via this seam (`tests/test_listener.py`).
 - **Why:** The Vosk→Whisper migration (this fork's mission). Coupling
   was exactly three call sites; the seam makes the swap a new class,
@@ -105,15 +104,15 @@ companion — keep them in sync.
   seam. Hardcode 16000 anywhere but `SAMPLE_RATE`. Pass a live
   recognizer into `run_listener` (restarts need the factory).
 
-### Vosk normalization split: hallucination filter vs user overrides
-- **What:** Two separate, sequential rewrites of Vosk transcripts
+### Normalization split: hallucination filter vs user overrides
+- **What:** Two separate, sequential rewrites of transcripts
   before matching, in this order:
   1. `_normalize()` in `core/listener.py` — plumbing rewrites, not
      user-facing. Two rules: strip leading `"and "` (chain glue on
      per-segment follow-up segments, s30) then leading `"the "`
      (mic-AGC hallucination artifact).
   2. `apply_overrides()` in `core/overrides.py` — user-configurable
-     mishearing rewrites (Vosk heard X, user meant Y). `get_overrides()`
+     mishearing rewrites (the engine heard X, user meant Y). `get_overrides()`
      in `commands.py` assembles the final list: **USER rules first**, then
      the enabled `DEFAULT_OVERRIDES` (minus any the user disabled — see
      "Default overrides toggle via a disabled-pattern list"). Rules apply
@@ -136,7 +135,7 @@ companion — keep them in sync.
   sufficient.
 - **Why:** A loose fuzzy matcher fires wrong commands on shared
   prefixes (the 0.3.0 "open like" vs "open plex" problem). A
-  strict matcher rejects plausible Vosk garbles unless the user has
+  strict matcher rejects plausible engine garbles unless the user has
   a rewrite for them. The split lets the matcher stay conservative
   (TAIL_THRESHOLD guard, etc.) while overrides cover the gray zone
   the user notices and wants to fix.
@@ -278,8 +277,8 @@ companion — keep them in sync.
   toggled off in the Overrides tab. Disabled defaults are stored by **pattern
   string** under `commands.json["disabled_default_overrides"]` (a list);
   `get_overrides()` (`commands.py`) filters them out of `DEFAULT_OVERRIDES`,
-  then appends the survivors AFTER the user rules (user-first — see "Vosk
-  normalization split"). Absent/empty key = all defaults on (back-compat).
+  then appends the survivors AFTER the user rules (user-first — see
+  "Normalization split"). Absent/empty key = all defaults on (back-compat).
   The default rules themselves are NEVER persisted — only the set of disabled
   patterns.
 - **Why a pattern list, not per-row `enabled` flags on disk:** defaults are
@@ -372,8 +371,8 @@ companion — keep them in sync.
 
 ### Entry point enforces single-instance via a per-UID QLocalServer lock
 - **What:** `voice_commander.py` `main()` creates the `QApplication`, then
-  calls `_acquire_single_instance()` **before** loading config or the Vosk
-  model. The lock is a Qt `QLocalServer` (Unix domain socket) named
+  calls `_acquire_single_instance()` **before** the costly config load and
+  recognizer wiring. The lock is a Qt `QLocalServer` (Unix domain socket) named
   `voice-commander-{os.getuid()}`. A would-be second instance probes with a
   `QLocalSocket`; if the probe connects, an instance is already running, so
   the new process prints "Already running" and `sys.exit(0)`. If nobody
@@ -389,7 +388,7 @@ companion — keep them in sync.
   control — never block a legitimate launch.
 - **Why before the model load:** the probe needs a live `QApplication` for
   the event dispatcher, but running it first means a redundant launch exits
-  in milliseconds instead of after a multi-second Vosk model load.
+  in milliseconds instead of after the multi-second startup wiring.
 - **Don't:** Move the guard after the model load. Use a fixed (non-UID)
   socket name. Drop the `singleton` reference. Make a failed `listen()`
   abort startup.
@@ -397,7 +396,7 @@ companion — keep them in sync.
 ### App-menu launches route through `--activate`; the lock socket carries messages
 - **What:** The `.desktop` entry's Exec is `voice-commander --activate`
   (written by `install.sh`). The flag (handled in `voice_commander.py`
-  before the Vosk import, like `--version`; logic in `core/activate.py`)
+  before the heavy imports, like `--version`; logic in `core/activate.py`)
   does one of two things: a running instance holds the lock → send it
   `open-settings` over the lock socket and exit (the instance pops/raises
   Settings via the tray's `_open_settings`, which already raise-focuses an
@@ -462,8 +461,8 @@ companion — keep them in sync.
   (APP_NAME, data/config dirs, unit names, placer Id `vcw-window-placer`,
   single-instance lock name); `tests/test_fork_identity.py` sweeps
   `core/` for hardcoded parent paths. install.sh reads the parent
-  install at most (seed commands.json on first install, copy the vosk
-  model instead of re-downloading) and never writes to it.
+  install at most (seed commands.json on first install) and never
+  writes to it.
 - **Don't:** Point the service at the repo checkout. Hardcode
   `voice-commander` (the parent namespace) anywhere in `core/` —
   derive from `core/paths.py`. Let install.sh write to parent paths.
@@ -597,8 +596,8 @@ companion — keep them in sync.
 - **What:** `SettingsDialog._save()` runs three phrase guards, in this order,
   BEFORE any write — each cleans the phrase boxes in place, shows a modal, and
   returns early (the next Save re-runs them and, finding nothing, proceeds):
-  1. `sanitize_phrases()` — strips characters that can't occur in a Vosk
-     transcription. Allowed: letters, digits, spaces, and commas (the
+  1. `sanitize_phrases()` — strips characters that can't occur in a
+     transcription (the recognizer seam strips punctuation). Allowed: letters, digits, spaces, and commas (the
      phrase-list separator); other whitespace collapses to a single space.
   2. `dedupe_phrases()` — drops phrases a single command lists more than once
      (case-insensitive, trimmed; first spelling kept). Runs AFTER (1) so
@@ -903,14 +902,13 @@ companion — keep them in sync.
 
 ### Wake is acknowledged on partials; LISTENING is an inactivity window; no-match is one-shot
 - **What:** The SLEEPING→LISTENING feedback (tray icon, mic LED, "Listening…"
-  notification) tracks *speech*, not Vosk's end-of-utterance endpoint (~1.5s of
-  silence). Three coupled rules in `run_listener` (`core/listener.py`):
-  - **Wake on partials:** in SLEEPING, the first Vosk *partial* containing the
+  notification) tracks *speech*, not the engine's end-of-utterance endpoint. Three coupled rules in `run_listener` (`core/listener.py`):
+  - **Wake on partials:** in SLEEPING, the first streaming *partial* containing the
     wake word transitions to LISTENING and fires the acknowledgement
     immediately (via `set_state`, which drives the LED/tray off `state_queue`).
     Once it leaves SLEEPING the branch can't re-fire on later partials of the
     same utterance, so no guard flag is needed. The SLEEPING-*finalize* branch
-    stays as the fallback for utterances Vosk finalizes with no useful partial.
+    stays as the fallback for utterances that finalize with no useful partial.
   - **Inactivity window:** every non-empty partial in LISTENING resets
     `command_window_start`, so `command_window` counts silence-since-you-stopped,
     NOT wall-clock-since-wake. A long multi-segment chain can't fall asleep
@@ -941,7 +939,8 @@ companion — keep them in sync.
     tunes where that line sits; `fuzzy_check` lives in `core/wake.py`
     (stdlib `difflib`, whole-word-then-fuzzy).
   - **Per-segment chains (s30):** recognizers advertise
-    `per_segment_finals` (True on WhisperRecognizer, False on Vosk).
+    `per_segment_finals` (True on WhisperRecognizer; False is the seam
+    default for streaming backends).
     When True, a successful match KEEPS the listener in LISTENING with
     the window refreshed — batch backends deliver each VAD segment of a
     paused chain as its own final, and sleeping after the first match
@@ -951,7 +950,7 @@ companion — keep them in sync.
     successful match sleeps SILENTLY (`matched_since_wake` flag) — the
     "No match" toast is only for a wake that never produced a command.
     `_normalize` also strips a leading "and " (chain glue on follow-up
-    segments). Vosk-mode behavior (match → sleep) is unchanged.
+    segments). Default-mode behavior (match → sleep) is unchanged.
   - **Audio wake engine (s31):** with config `wake_engine=openwakeword`,
     an `OpenWakeWordEngine` (`core/wakeword.py`; model file from
     `DATA_DIR/wakewords/<wake_model>.onnx`, threshold `wake_threshold`)
@@ -1018,7 +1017,7 @@ companion — keep them in sync.
 - **Why:** Substring matching tripped the wake on any longer word embedding the
   wake word — a real misfire source.
 - **Don't:** Revert to `w in t`. Use `\b` (breaks punctuation-flanked words).
-  Add PySide6/Vosk deps — `core/wake.py` is stdlib-only (`re`) with a pure-logic
+  Add PySide6/engine deps — `core/wake.py` is stdlib-only (`re`) with a pure-logic
   test suite (`tests/test_wake.py`); keep it that way.
 
 ### Celery Man echo guard: MPRIS playing-check, not wake-word muting

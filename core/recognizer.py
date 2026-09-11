@@ -12,16 +12,17 @@ Contract every backend must honor:
     (empty text) report voice activity from backends that have no
     streaming partials, so the listener's inactivity window can refresh.
   - Event text is always stripped and lowercase. The normalization lives
-    HERE, not in the listener, so backends with different output styles
-    (Vosk: bare lowercase; Whisper: punctuated prose) present identical
-    text to the wake check / overrides / matcher downstream.
+    HERE, not in the listener, so an engine's output style (Whisper:
+    punctuated, capitalized prose) never leaks past the seam -- the wake
+    check / overrides / matcher downstream see identical text regardless
+    of engine.
 
-The listener never imports a speech engine; it consumes events. Engine
-imports stay inside the concrete classes so an install that only uses
-one backend never needs the other's package.
+The listener never imports a speech engine; it consumes events. The seam
+is what lets the state machine be tested engine-free (test_listener.py
+injects scripted recognizers) and kept the Vosk->Whisper migration from
+being a listener rewrite.
 """
 
-import json
 import re
 from dataclasses import dataclass
 
@@ -40,7 +41,7 @@ class RecognizerEvent:
 # -- Whisper output cleanup ----------------------------------------------------
 # Whisper emits punctuated, capitalized prose with digits ("Open Dolphin on
 # monitor 3.") and labels non-speech in brackets ("[typing]", "(music)").
-# The seam contract wants what Vosk produced: bare lowercase words.
+# The seam contract wants bare lowercase words.
 
 _NOISE_TAG_RE = re.compile(r"\[[^\]]*\]|\([^)]*\)")
 _NON_WORD_RE = re.compile(r"[^a-z0-9']+")  # keep apostrophes: "what's playing"
@@ -56,38 +57,10 @@ def _clean_whisper_text(raw: str) -> str:
     empty as nothing-to-report."""
     text = _NOISE_TAG_RE.sub(" ", raw).lower()
     text = _NON_WORD_RE.sub(" ", text)
-    # Whisper writes "monitor 3" where Vosk wrote "monitor three"; phrases
-    # and slot aliases are word-based, so standalone small digits become
-    # words. Multi-digit tokens pass through untouched.
+    # Whisper writes "monitor 3", but phrases and slot aliases are
+    # word-based, so standalone small digits become words. Multi-digit
+    # tokens pass through untouched.
     return " ".join(_DIGIT_WORDS.get(tok, tok) for tok in text.split())
-
-
-class VoskRecognizer:
-    """Streaming wrapper around vosk.KaldiRecognizer.
-
-    Vosk answers every chunk: AcceptWaveform(data) False means
-    mid-utterance (partial text available), True means the engine
-    detected end-of-utterance (final text available). So feed() always
-    returns an event, never None.
-    """
-
-    # A whole command chain arrives in ONE final (the engine's endpointer
-    # decides utterance boundaries) -- the listener sleeps after a match.
-    per_segment_finals = False
-
-    def __init__(self, model):
-        import vosk  # deferred: only a Vosk-backend install needs the package
-
-        self._rec = vosk.KaldiRecognizer(model, SAMPLE_RATE)
-
-    def feed(self, data: bytes) -> RecognizerEvent:
-        if self._rec.AcceptWaveform(data):
-            text = json.loads(self._rec.Result()).get("text", "")
-            kind = "final"
-        else:
-            text = json.loads(self._rec.PartialResult()).get("partial", "")
-            kind = "partial"
-        return RecognizerEvent(kind=kind, text=text.strip().lower())
 
 
 class WhisperRecognizer:
@@ -175,46 +148,32 @@ class WhisperRecognizer:
 
 
 def make_recognizer_factory():
-    """Build the recognizer factory for the configured backend.
+    """Build the whisper recognizer factory.
 
     Called once at app startup (voice_commander.py). Heavy one-time setup
-    happens HERE -- Vosk model load, whisper-server unit spin-up -- while
-    the returned zero-arg factory only does cheap per-listener-run work,
-    so mic restarts stay fast. Engine modules are imported lazily per
-    branch: a vosk install never imports onnxruntime and vice versa.
+    happens HERE -- the whisper-server unit spin-up -- while the returned
+    zero-arg factory only does cheap per-listener-run work, so mic
+    restarts stay fast.
     """
     import core.commands as commands
+    import core.vad as vad
+    import core.whisper_client as whisper_client
+    import core.whisper_server as whisper_server
 
-    backend = commands.get_recognizer_backend()
+    # Bring the transcription server up now (unit restart if config
+    # changed). Failure is non-fatal: the listener surfaces unreachable-
+    # server errors per segment, and systemd keeps retrying the unit.
+    whisper_server.ensure_server()
 
-    if backend == "whisper":
-        import core.vad as vad
-        import core.whisper_client as whisper_client
-        import core.whisper_server as whisper_server
-
-        # Bring the transcription server up now (unit restart if config
-        # changed). Failure is non-fatal: the listener surfaces unreachable-
-        # server errors per segment, and systemd keeps retrying the unit.
-        whisper_server.ensure_server()
-
-        url = f"http://127.0.0.1:{commands.get_whisper_server_port()}/inference"
-        vad_model = commands.get_vad_model_path()
-        tail_ms = commands.get_whisper_vad_tail_ms()
-
-        def factory():
-            return WhisperRecognizer(
-                vad=vad.SileroVAD(vad_model),
-                transcribe=lambda pcm: whisper_client.transcribe_pcm(pcm, url),
-                tail_ms=tail_ms,
-            )
-
-        return factory
-
-    import vosk
-
-    model = vosk.Model(commands.get_vosk_model_path())
+    url = f"http://127.0.0.1:{commands.get_whisper_server_port()}/inference"
+    vad_model = commands.get_vad_model_path()
+    tail_ms = commands.get_whisper_vad_tail_ms()
 
     def factory():
-        return VoskRecognizer(model)
+        return WhisperRecognizer(
+            vad=vad.SileroVAD(vad_model),
+            transcribe=lambda pcm: whisper_client.transcribe_pcm(pcm, url),
+            tail_ms=tail_ms,
+        )
 
     return factory

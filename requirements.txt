@@ -1,4 +1,3 @@
-vosk>=0.3.45
 PySide6>=6.6.0
 # Whisper backend: Silero VAD runs on onnxruntime (numpy comes with it,
 # pinned here anyway since core/vad.py imports it directly). The Whisper

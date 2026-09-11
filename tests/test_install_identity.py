@@ -40,7 +40,6 @@ def test_placer_id():
 
 def test_commands_model_dirs_derive_from_paths():
     import core.commands as commands
-    assert commands._DEFAULT_VOSK_MODEL_DIR.startswith(paths.DATA_DIR)
     assert commands._MODELS_DIR.startswith(paths.DATA_DIR)
 
 

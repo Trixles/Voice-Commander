@@ -3,7 +3,7 @@ voice_commander.py
 ==================
 Entry point. Does three things and nothing else:
 
-  1. Load the Vosk model once.
+  1. Wire the whisper recognizer once (server unit up, factory built).
   2. Build the wake word detector and Context.
   3. Drive the outer restart loop: wait for mic ready -> run listener -> repeat.
 
@@ -28,16 +28,16 @@ from core.paths import APP_NAME
 _TAG = f"[{APP_NAME}]"
 
 
-# Handle --version BEFORE importing Qt/Vosk so `voice-commander --version`
-# returns instantly without loading the GUI stack or the speech model.
+# Handle --version BEFORE importing Qt so `voice-commander --version`
+# returns instantly without loading the GUI stack.
 if __name__ == "__main__" and len(sys.argv) == 2 and sys.argv[1] in ("--version", "-V"):
     print(f"{APP_NAME} {__version__}")
     sys.exit(0)
 
 # --activate is the app-menu path (the .desktop Exec line carries it): tell a
 # running instance to open Settings, or start the systemd service if nothing
-# is running. Handled before the Vosk import for the same instant-exit reason
-# as --version -- and crucially, this path NEVER runs the app standalone, so
+# is running. Handled before the heavy imports for the same instant-exit
+# reason as --version -- and crucially, this path NEVER runs the app standalone, so
 # an app-menu click can't steal the single-instance lock from the service.
 if __name__ == "__main__" and len(sys.argv) == 2 and sys.argv[1] == "--activate":
     from PySide6.QtCore import QCoreApplication
@@ -169,7 +169,7 @@ def main() -> None:
 
     # Qt app must exist before the single-instance probe (QLocalSocket needs
     # the event dispatcher). Run the guard FIRST -- before the costly config
-    # and Vosk model loads -- so a redundant launch (e.g. a terminal start
+    # load and recognizer wiring -- so a redundant launch (e.g. a terminal start
     # alongside the systemd service) exits fast instead of spinning up a second
     # listener + duplicate tray icon.
     app = QApplication(sys.argv)
@@ -205,15 +205,12 @@ def main() -> None:
     context = Context()
 
     # The listener never touches an engine API (see core/recognizer.py).
-    # make_recognizer_factory() does the heavy one-time setup for the
-    # configured backend (Vosk model load, or whisper-server unit spin-up)
-    # and returns the cheap per-mic-restart factory.
-    backend = commands.get_recognizer_backend()
-    print(f"{_TAG} Recognizer backend: {backend}")
+    # make_recognizer_factory() does the heavy one-time setup (whisper-server
+    # unit spin-up) and returns the cheap per-mic-restart factory.
     try:
         recognizer_factory = make_recognizer_factory()
     except Exception as e:
-        print(f"{_TAG} ERROR: Failed to set up {backend} backend: {e}", file=sys.stderr)
+        print(f"{_TAG} ERROR: Failed to set up whisper backend: {e}", file=sys.stderr)
         sys.exit(1)
     print(f"{_TAG} Recognizer ready.")
 

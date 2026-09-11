@@ -1,7 +1,7 @@
 """
 tests/test_wake.py
 ==================
-Pure-logic tests for core/wake.py (WakeWordDetector). No Qt, no Vosk,
+Pure-logic tests for core/wake.py (WakeWordDetector). No Qt, no engine,
 no subprocess.
 
 `is_wake_only()` exists so the listener can tell, once it has entered
@@ -61,14 +61,14 @@ def test_check_multiword_phrase_embedded_does_not_match():
 
 
 def test_check_is_case_insensitive():
-    """Vosk emits lowercase, but the detector must not depend on that."""
+    """The seam emits lowercase, but the detector must not depend on that."""
     d = WakeWordDetector(["Computer"])
     assert d.check("COMPUTER") is True
 
 
 def test_check_tolerates_adjacent_punctuation():
     """Word boundaries fall at punctuation too, so a stray trailing mark
-    (defensive -- Vosk normally emits none) doesn't hide the wake word."""
+    (defensive -- the seam normally emits none) doesn't hide the wake word."""
     d = WakeWordDetector(["computer"])
     assert d.check("computer.") is True
 

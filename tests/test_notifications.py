@@ -6,7 +6,7 @@ _NOTIFICATION_TEMPLATES): a couple of representative templates render as
 expected, the URL-domain helper strips scheme/www/path, and an action with
 no entry falls back to the generic acknowledgement.
 
-Pure logic -- no Qt, no Vosk, no subprocess. Run from the repo root:
+Pure logic -- no Qt, no engine, no subprocess. Run from the repo root:
   pytest -q
 """
 

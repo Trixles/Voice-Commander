@@ -572,22 +572,9 @@ def get_overrides() -> list[dict]:
     return user + defaults
 
 
-_DEFAULT_VOSK_MODEL_DIR  = os.path.join(paths.DATA_DIR, "vosk-model/")
-_DEFAULT_VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
-
-# Whisper-backend model files (ggml weights for whisper-server, Silero VAD
-# onnx) live under a shared models/ dir, unlike the legacy vosk-model/ dir.
+# Model files (ggml weights for whisper-server, Silero VAD onnx) live
+# under a shared models/ dir.
 _MODELS_DIR = os.path.join(paths.DATA_DIR, "models/")
-
-
-def get_recognizer_backend() -> str:
-    """'vosk' or 'whisper'. Hand-edited typos fall back to vosk loudly
-    rather than killing the service over a config string."""
-    backend = _config.get("recognizer_backend", "vosk")
-    if backend not in ("vosk", "whisper"):
-        print(f"[commands] Unknown recognizer_backend {backend!r}, using vosk.")
-        return "vosk"
-    return backend
 
 
 def get_whisper_server_port() -> int:
@@ -691,34 +678,6 @@ def get_wake_confirm() -> float:
     return float(_config.get("wake_confirm", 0.7))
 
 
-def get_vosk_model_path() -> str:
-    """
-    Return the absolute path to the Vosk model directory.
-
-    Resolution order:
-      1. 'vosk_model' key in commands.json -- can be an absolute path or a bare
-         directory name (resolved relative to _DEFAULT_VOSK_MODEL_DIR).
-      2. Hardcoded default: _DEFAULT_VOSK_MODEL_DIR / _DEFAULT_VOSK_MODEL_NAME.
-
-    Raises ValueError if the resolved path does not look like a Vosk model
-    (i.e. does not contain am/final.mdl).
-    """
-    raw = _config.get("vosk_model", "").strip()
-    if raw:
-        path = raw if os.path.isabs(raw) else os.path.join(_DEFAULT_VOSK_MODEL_DIR, raw)
-    else:
-        path = os.path.join(_DEFAULT_VOSK_MODEL_DIR, _DEFAULT_VOSK_MODEL_NAME)
-
-    path = os.path.normpath(path)
-
-    if not os.path.isdir(path):
-        raise ValueError(f"Vosk model path does not exist: {path}")
-    if not os.path.isfile(os.path.join(path, "am", "final.mdl")):
-        raise ValueError(f"Not a valid Vosk model directory (missing am/final.mdl): {path}")
-
-    return path
-
-
 # -- "on [alias]" monitor placement detection --------------------------------
 
 def _detect_on_monitor(heard: str) -> str | None:
@@ -784,8 +743,9 @@ def _wm_class_hint(cmd: dict) -> str:
 def sanitize_phrase_text(raw: str) -> tuple[str, str]:
     """Strip characters that can't occur in a spoken command from phrase text.
 
-    Vosk transcriptions are letters, digits and spaces only -- never
-    punctuation or symbols -- so a phrase containing "{", "?", "@", etc. can
+    Transcriptions reach matching as letters, digits and spaces only (the
+    recognizer seam strips punctuation and symbols) -- so a phrase
+    containing "{", "?", "@", etc. can
     never match anything a user says; it's a dead phrase. Worse, "{...}" makes
     the matcher treat the phrase as slot-bearing (see _score_segment), which
     once crashed the listener on an unbalanced slot name. We forbid the whole
@@ -1336,7 +1296,7 @@ def try_match(heard: str, gui_env: dict, context) -> bool:
 
     # -- Try chained commands first -------------------------------------------
     # Split aggressively on " and ", " an ", or " in " -- the latter two are
-    # common Vosk mishearings of "and" (the Blue Yeti reliably hears "and" as
+    # common mishearings of "and" (the Blue Yeti reliably hears "and" as
     # "in"; cheaper mics do too). The pattern WILL produce false-positive
     # splits like "open mind and body" -> ["open mind", "body"]. Partial
     # execution (in _match_chain_segments) fires every segment that matches and
@@ -1504,8 +1464,6 @@ if __name__ == "__main__":
             "match_threshold": DEFAULT_THRESHOLD,
             "notifications": True,
             "auto_pause_media": True,
-            "vosk_model": _DEFAULT_VOSK_MODEL_NAME,
-            "recognizer_backend": "vosk",
             "whisper_model": "base.en",
             "whisper_server_port": 8910,
             "whisper_vad_tail_ms": 400,

@@ -10,9 +10,9 @@ boundaries, so one SileroVAD instance must see a single continuous
 audio stream (the recognizer factory builds a fresh one per listener
 run, matching the mic-restart lifecycle).
 
-onnxruntime/numpy imports are deferred to __init__: only a
-whisper-backend install needs them (same rule as vosk inside
-VoskRecognizer -- see the recognizer-seam invariant).
+onnxruntime/numpy imports are deferred to __init__: engine imports stay
+out of module scope (see the recognizer-seam invariant), so importing
+this module for tests never drags in the runtime.
 """
 
 from core.recognizer import SAMPLE_RATE

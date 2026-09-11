@@ -10,7 +10,6 @@
 #   ~/.local/share/voice-commander/app/      -- application code
 #   ~/.local/share/voice-commander/venv/     -- Python virtual environment
 #   ~/.local/share/voice-commander/icons/    -- tray + service icons
-#   ~/.local/share/voice-commander/vosk-model/ -- Vosk model (vosk backend)
 #   ~/.local/share/voice-commander/models/   -- whisper ggml + silero VAD
 #   ~/.local/share/kwin/scripts/vc-window-placer/   -- KWin helper script
 #   ~/.config/voice-commander/commands.json  -- user-editable config
@@ -38,12 +37,7 @@ readonly KWIN_SCRIPT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/vc-w
 readonly APP_DIR="${DATA_DIR}/app"
 readonly VENV_DIR="${DATA_DIR}/venv"
 readonly ICONS_DIR="${DATA_DIR}/icons"
-readonly VOSK_DIR="${DATA_DIR}/vosk-model"
 readonly MODELS_DIR="${DATA_DIR}/models"
-
-
-readonly VOSK_MODEL_NAME="vosk-model-small-en-us-0.15"
-readonly VOSK_MODEL_URL="https://alphacephei.com/vosk/models/${VOSK_MODEL_NAME}.zip"
 
 # Whisper backend assets. Model name must match the whisper_model config
 # default (core/commands.py --emit-defaults).
@@ -274,35 +268,6 @@ install_kwin_script() {
     ok "KWin script installed."
 }
 
-# -- Vosk model --------------------------------------------------------------
-install_vosk_model() {
-    local model_path="${VOSK_DIR}/${VOSK_MODEL_NAME}"
-    if [[ -f "${model_path}/am/final.mdl" ]]; then
-        ok "Vosk model already present, skipping download."
-        return
-    fi
-
-    info "Downloading Vosk speech recognition model (~40 MB)..."
-    mkdir -p "${VOSK_DIR}"
-    local tmp_zip
-    tmp_zip=$(mktemp --suffix=.zip)
-    # shellcheck disable=SC2064
-    trap "rm -f '${tmp_zip}'" EXIT
-
-    if ! curl -fL --progress-bar -o "${tmp_zip}" "${VOSK_MODEL_URL}"; then
-        die "Failed to download Vosk model from ${VOSK_MODEL_URL}"
-    fi
-
-    info "Extracting model..."
-    unzip -q "${tmp_zip}" -d "${VOSK_DIR}"
-    rm -f "${tmp_zip}"
-    trap - EXIT
-
-    [[ -f "${model_path}/am/final.mdl" ]] \
-        || die "Vosk model extracted but doesn't look valid (missing am/final.mdl)"
-    ok "Vosk model installed."
-}
-
 # -- Whisper backend models ---------------------------------------------------
 install_whisper_models() {
     mkdir -p "${MODELS_DIR}/whisper"
@@ -491,7 +456,6 @@ main() {
     install_venv
     install_icons
     install_kwin_script
-    install_vosk_model
     install_whisper_models
     install_wakeword_models
     install_readme

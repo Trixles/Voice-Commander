@@ -32,22 +32,6 @@ def _restore_globals():
 
 # -- Config keys ---------------------------------------------------------------
 
-def test_backend_defaults_to_vosk():
-    commands._config = {}
-    assert commands.get_recognizer_backend() == "vosk"
-
-
-def test_backend_reads_config_key():
-    commands._config = {"recognizer_backend": "whisper"}
-    assert commands.get_recognizer_backend() == "whisper"
-
-
-def test_unknown_backend_falls_back_to_vosk():
-    # commands.json is hand-editable; a typo must not kill the service.
-    commands._config = {"recognizer_backend": "whipser"}
-    assert commands.get_recognizer_backend() == "vosk"
-
-
 def test_whisper_port_default_and_override():
     commands._config = {}
     assert commands.get_whisper_server_port() == 8910
@@ -82,15 +66,17 @@ def test_vad_model_path_is_absolute():
 
 
 def test_emit_defaults_includes_whisper_keys():
-    # install.sh's config generator must ship the new keys so users can
-    # discover them; backend default stays vosk (parent-compatible).
+    # install.sh's config generator must ship the whisper keys so users can
+    # discover them. The Vosk arm is gone (s40 scrub): no backend selector,
+    # no vosk_model -- whisper IS the recognizer.
     out = subprocess.run(
         [sys.executable, "-m", "core.commands", "--emit-defaults"],
         capture_output=True, text=True,
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     )
     config = json.loads(out.stdout)
-    assert config["recognizer_backend"] == "vosk"
+    assert "recognizer_backend" not in config
+    assert "vosk_model" not in config
     assert config["whisper_model"] == "base.en"
     assert config["whisper_server_port"] == 8910
     assert config["whisper_vad_tail_ms"] == 400
@@ -205,30 +191,8 @@ def test_ensure_server_survives_systemctl_failure(monkeypatch, tmp_path, capsys)
 
 # -- Backend factory -----------------------------------------------------------
 
-def test_factory_vosk_backend_loads_model_once_and_wraps(monkeypatch):
-    commands._config = {"recognizer_backend": "vosk"}
-    import vosk
-
-    loads = []
-    monkeypatch.setattr(vosk, "Model", lambda path: loads.append(path) or "MODEL")
-    monkeypatch.setattr(commands, "get_vosk_model_path", lambda: "/fake/model")
-    made = []
-    monkeypatch.setattr(
-        recognizer, "VoskRecognizer",
-        lambda model: made.append(model) or "REC",
-    )
-
-    factory = recognizer.make_recognizer_factory()
-    assert loads == ["/fake/model"]  # model loads at wiring time...
-    assert factory() == "REC"
-    assert factory() == "REC"
-    assert loads == ["/fake/model"]  # ...and only once, across restarts
-    assert made == ["MODEL", "MODEL"]
-
-
 def test_factory_whisper_backend_wires_vad_client_and_server(monkeypatch):
     commands._config = {
-        "recognizer_backend": "whisper",
         "whisper_server_port": 9001,
         "whisper_vad_tail_ms": 300,
     }

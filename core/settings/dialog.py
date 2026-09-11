@@ -5,7 +5,7 @@ QDialog-based settings UI for Voice Commander.
 
 Tab layout (left to right):
   - Commands    : Wake word field, command accordion rows
-  - Overrides   : Vosk mishearing rewrite rules (defaults + user rules)
+  - Overrides   : mishearing rewrite rules (defaults + user rules)
   - Displays    : monitor alias accordion rows
   - Model       : Whisper model path picker
   - Log         : live listener output with colour-coded categories

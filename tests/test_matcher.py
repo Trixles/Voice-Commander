@@ -2,7 +2,7 @@
 tests/test_matcher.py
 =====================
 Pure-logic tests for the matcher pipeline in core/commands.py and the
-override pre-processor in core/overrides.py. No Qt, no Vosk, no
+override pre-processor in core/overrides.py. No Qt, no engine, no
 subprocess: just call the functions and assert on what they return.
 
 Two purposes:
@@ -43,9 +43,9 @@ def test_tail_rescore_rejects_open_like_vs_open_plex():
     assert _match_non_slot("open like", "open plex") == 0.0
 
 
-def test_tail_rescore_accepts_plausible_vosk_garble():
-    """'open plix' vs 'open plex' is a 1-char swap in the tail --
-    Vosk-realistic. Tail ratio ~0.75 clears TAIL_THRESHOLD."""
+def test_tail_rescore_accepts_plausible_engine_garble():
+    """'open plix' vs 'open plex' is a 1-char swap in the tail -- a
+    realistic mishearing. Tail ratio ~0.75 clears TAIL_THRESHOLD."""
     score = _match_non_slot("open plix", "open plex")
     assert score >= 0.75
 

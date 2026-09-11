@@ -182,8 +182,8 @@ def test_final_command_in_listening_dispatches_and_sleeps(monkeypatch):
 
 
 def test_final_text_is_normalized_before_matching(monkeypatch):
-    # _normalize strips the AGC-hallucinated leading "the " (see "Vosk
-    # normalization split" invariant) -- must survive the seam refactor.
+    # _normalize strips the AGC-hallucinated leading "the " (see the
+    # "Normalization split" invariant) -- must survive the seam refactor.
     r = run_machine(
         [RecognizerEvent("final", "the open firefox")],
         monkeypatch,
@@ -384,7 +384,7 @@ def test_per_segment_match_stays_listening_for_the_next_segment(monkeypatch):
     assert r["context"].state == State.LISTENING  # window still open at end
 
 
-def test_vosk_mode_still_sleeps_after_match(monkeypatch):
+def test_streaming_mode_still_sleeps_after_match(monkeypatch):
     # Default recognizers (no per_segment_finals) keep the classic
     # behavior: chain arrives in one final, match -> back to sleep.
     r = run_machine(

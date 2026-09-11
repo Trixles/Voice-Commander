@@ -245,7 +245,7 @@ def clear_placer_queue(gui_env: dict) -> None:
 
 def _resolve_output_alias(raw: str) -> str:
     """
-    Fuzzy-match `raw` (what Vosk heard) against all aliases in the monitors
+    Fuzzy-match `raw` (what was heard) against all aliases in the monitors
     block of commands.json and return the best-scoring OUTPUT NAME.
 
     Name-only by design: it deliberately does NOT consult the cached

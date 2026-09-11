@@ -603,81 +603,6 @@ def get_vad_model_path() -> str:
     return os.path.join(_MODELS_DIR, "silero_vad.onnx")
 
 
-def get_wake_engine() -> str:
-    """'text' (classic transcription-based wake detection) or
-    'openwakeword' (audio-level engine, ~100-200ms ack). Unknown values
-    fall back to text -- always-works beats fast-but-absent."""
-    engine = _config.get("wake_engine", "text")
-    if engine not in ("text", "openwakeword"):
-        print(f"[commands] Unknown wake_engine {engine!r}, using text.")
-        return "text"
-    return engine
-
-
-def get_wake_model_path() -> str:
-    """Wake models are drop-in .onnx files in DATA_DIR/wakewords/;
-    'wake_model' is the file stem (future GUI dropdown scans the dir)."""
-    name = str(_config.get("wake_model", "computer_v2")).strip() or "computer_v2"
-    return os.path.join(paths.DATA_DIR, "wakewords", f"{name}.onnx")
-
-
-def get_wake_threshold() -> float:
-    return float(_config.get("wake_threshold", 0.5))
-
-
-def get_wake_vad_threshold() -> float:
-    """Speech gate for the audio wake engine (0 = off).
-
-    openWakeWord can require its bundled Silero VAD to have detected
-    speech in the ~0.4-0.56s before a frame, or the frame's score is
-    forced to 0. s33 measured why this matters: BOTH wake models
-    false-fired several times an hour on non-speech transients
-    (keyboard clicks, sighs, room noise) while leaving genuine
-    "computer" scores untouched -- exactly what this gate filters."""
-    return float(_config.get("wake_vad_threshold", 0.5))
-
-
-def get_wake_verifier_path() -> str | None:
-    """Speaker verifier for the audio wake engine: a second-stage
-    classifier that re-scores any frame the base model would fire on,
-    answering "is this the enrolled speaker saying the wake word?".
-
-    It is a VOICEPRINT -- trained locally per user
-    (benchmark/train_v2_verifier.py), so it is user data and ships with
-    nothing. Empty (the shipped default) = off. Same drop-in directory
-    as the .onnx wake models; 'wake_verifier' is the file stem."""
-    name = str(_config.get("wake_verifier", "")).strip()
-    if not name:
-        return None
-    return os.path.join(paths.DATA_DIR, "wakewords", f"{name}.pkl")
-
-
-def get_wake_audio_dump_dir() -> str | None:
-    """Diagnostic capture of the audio that fires the wake engine: the
-    directory to dump `.wav`s into when `wake_audio_dump` is on, else None.
-
-    Off by default. A false fire otherwise leaves nothing to inspect --
-    the engine judges raw sound and the waveform is gone by the time the
-    journal records the score. See `core/wake_dump.py` for the privacy
-    shape (only SLEEPING audio is ever buffered; the command you speak
-    afterward never is)."""
-    if not _config.get("wake_audio_dump", False):
-        return None
-    return os.path.join(paths.DATA_DIR, "wake_dumps")
-
-
-def get_wake_confirm() -> float:
-    """Fuzzy threshold for confirming an AUDIO wake against whisper's text
-    (0 disables). The audio engine acks instantly on sound; this then checks
-    that whisper's transcript of the same utterance actually contains the
-    wake word (within this tolerance) or produced a command. If neither, the
-    wake was a false fire and the listener sleeps SILENTLY instead of nagging
-    "No match". Zero added latency -- the ack already happened; only the
-    revert of a phantom is deferred. Lower = more forgiving of whisper
-    mishearings (fewer missed real wakes, more junk let through)."""
-    return float(_config.get("wake_confirm", 0.7))
-
-
 # -- "on [alias]" monitor placement detection --------------------------------
 
 def _detect_on_monitor(heard: str) -> str | None:
@@ -1467,13 +1392,6 @@ if __name__ == "__main__":
             "whisper_model": "base.en",
             "whisper_server_port": 8910,
             "whisper_vad_tail_ms": 400,
-            "wake_engine": "text",
-            "wake_model": "computer_v2",
-            "wake_threshold": 0.5,
-            "wake_vad_threshold": 0.5,
-            "wake_verifier": "",
-            "wake_audio_dump": False,
-            "wake_confirm": 0.7,
             # open_mic / close_mic ship inside _default_commands() now -- no
             # separate top-level open_mic_phrases / close_mic_phrases keys.
             "commands": _default_commands() + [dict(p) for p in PINNED_SLOT],

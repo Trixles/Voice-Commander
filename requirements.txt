@@ -5,18 +5,3 @@ PySide6>=6.6.0
 # not in Python.
 onnxruntime>=1.20.0
 numpy>=1.26.0
-# openWakeWord runtime needs (the package itself is installed --no-deps in
-# install.sh because its declared tflite-runtime dep has no py3.13+ wheels).
-# scikit-learn: openwakeword/__init__ unconditionally imports its
-# custom-verifier module, which imports sklearn -- import fails without it.
-# The CEILING is load-bearing, not cosmetic: install.sh rm -rf's the venv
-# and reinstalls on every deploy, while the wake verifier .pkl in
-# DATA_DIR/wakewords/ survives by design. sklearn only promises pickle
-# compatibility across PATCH releases, so an open-ended requirement lets a
-# routine redeploy pull a minor that can no longer unpickle the user's
-# voiceprint -- which surfaces as the wake word running unverified.
-# Raise the ceiling deliberately, and retrain the verifier when you do.
-tqdm>=4.60.0
-scipy>=1.11.0
-requests>=2.30.0
-scikit-learn>=1.4.0,<1.10

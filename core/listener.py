@@ -40,7 +40,6 @@ from core.wake import WakeWordDetector
 import core.commands as commands
 import core.media_control as media_control
 import core.overrides as overrides
-from core import wake_dump
 
 
 # States that make up the transient "wake window": the app is awake and
@@ -252,7 +251,6 @@ def run_listener(
     gui_env: dict,
     state_queue=None,
     command_queue=None,
-    wake_engine_factory=None,
 ) -> None:
     """
     Run the main audio capture + recognition loop on `source`.
@@ -264,12 +262,6 @@ def run_listener(
                           run_listener invocation, so a mic restart gets a
                           fresh recognizer while heavy engine state stays
                           alive inside the factory's closure.
-    wake_engine_factory -- optional zero-arg callable returning an audio wake
-                          engine (core/wakeword.py): feed(chunk) -> fired?.
-                          Fed ONLY in SLEEPING; a fire acknowledges the wake
-                          instantly (~100-200ms) instead of waiting for the
-                          recognizer's transcription. None = classic
-                          text-based wake only.
     state_queue   -- if provided, push State values whenever context.state changes
     command_queue -- if provided, check each loop for 'toggle_open_mic' / 'quit'
     """
@@ -311,55 +303,13 @@ def run_listener(
     # classic match -> sleep behavior; the seam default is that shape.
     per_segment = getattr(rec, "per_segment_finals", False)
 
-    # A broken wake engine (missing dep, missing model file) must never
-    # kill this thread -- that leaves the app deaf behind a healthy tray
-    # icon (s31: openwakeword's sklearn import did exactly that). Degrade
-    # to classic text wake, LOUDLY (always-on toast, same rule as the
-    # placement-failed toast).
-    wake_engine = None
-    if wake_engine_factory is not None:
-        try:
-            wake_engine = wake_engine_factory()
-        except Exception as e:
-            print(f"[listener] Wake engine failed, falling back to text wake: {e}")
-            _notify("Wake engine failed",
-                    "Falling back to transcription-based wake -- check the journal.",
-                    gui_env=gui_env)
-        else:
-            # The engine is alive but a CONFIGURED verifier didn't load,
-            # so the wake word is running without its false-fire filter.
-            # _notify, not _notify_general: this must not be silenceable
-            # by the notifications toggle.
-            if getattr(wake_engine, "verifier_error", None):
-                print("[listener] Wake verifier failed to load, wake word is "
-                      f"UNVERIFIED: {wake_engine.verifier_error}")
-                _notify("Wake verifier failed",
-                        "Wake word is running unverified -- retrain the verifier.",
-                        gui_env=gui_env)
-
     print(f"[listener] Listening on: {source}")
 
-    # Optional wake-audio capture (diagnostic, off by default). Keeps the
-    # last few seconds of SLEEPING audio in memory and writes it out ONLY
-    # when the audio engine fires, so a misfire becomes a concrete .wav
-    # instead of a lost waveform. Pushed only in SLEEPING (see the wake
-    # block below), so it captures what WOKE the app, never the command.
-    wake_dump_dir = commands.get_wake_audio_dump_dir()
-    wake_ring = wake_dump.WakeAudioRing() if wake_dump_dir else None
-
-    # Text-confirmation of audio wakes (0 disables). The audio engine acks on
-    # sound; a phantom fire is then caught when whisper's transcript neither
-    # contains the wake word nor matches a command -> sleep silently instead
-    # of nagging "No match". Only audio wakes are provisional; a text wake
-    # already carries the wake word, so it is confirmed by construction.
-    confirm_threshold = commands.get_wake_confirm()
-    audio_wake_unconfirmed: bool = False
-
-    # Transcription-health warning. A dead whisper-server makes every wake
-    # go unconfirmed and silently revert -- indistinguishable from phantoms,
-    # so an outage looks like a stone-dead app with no feedback (lived it on
-    # 2026-08-17). The recognizer now reports failures as "error" events;
-    # warn LOUDLY once per outage and re-arm on recovery.
+    # Transcription-health warning. A dead whisper-server means no wake and
+    # no commands with nothing in the UI to say why -- an outage looks like
+    # a stone-dead app with no feedback (lived it on 2026-08-17). The
+    # recognizer reports failures as "error" events; warn LOUDLY once per
+    # outage and re-arm on recovery.
     transcription_down: bool = False
 
     command_window_start: float = 0.0
@@ -395,14 +345,6 @@ def run_listener(
                     # ran out of follow-ups. That's success, not a miss --
                     # no toast.
                     print("[listener] Chain window closed, back to sleep.")
-                    set_state(State.SLEEPING)
-                elif audio_wake_unconfirmed:
-                    # Audio wake that whisper never confirmed -- a phantom that
-                    # produced no transcript at all. Sleep SILENTLY; nagging
-                    # "No match" for a fire the user never caused is the exact
-                    # annoyance this feature exists to kill.
-                    print("[listener] Audio wake unconfirmed (silent), back to sleep.")
-                    audio_wake_unconfirmed = False
                     set_state(State.SLEEPING)
                 else:
                     print("[listener] Command window expired, back to sleep.")
@@ -454,68 +396,6 @@ def run_listener(
             except queue.Empty:
                 pass
 
-        # -- Audio wake engine (openWakeWord) ---------------------------------
-        # Fed ONLY in SLEEPING: once awake, transcription owns the show. The
-        # recognizer still consumes this same chunk below -- the wake
-        # utterance's eventual final is absorbed by the existing paths
-        # (wake-only -> swallowed; wake+command -> matcher tolerates the
-        # prefix), so an audio wake needs no new state handling.
-        if wake_engine is not None and context.state == State.SLEEPING:
-            # Buffer this chunk BEFORE feeding, so the frame that fires is
-            # part of the dump. Only ever pushed here in SLEEPING -- the
-            # ring never sees LISTENING (command) audio.
-            if wake_ring is not None:
-                wake_ring.push(data)
-            # Same degrade rung as the construction failure above, just
-            # later in the engine's life. feed() runs USER-SUPPLIED
-            # pickled code once a verifier is configured (sklearn
-            # version skew raising inside predict_proba is the classic
-            # one), and an escaping exception here kills this thread and
-            # leaves the app deaf behind a healthy tray icon -- exactly
-            # the s31 failure. Dropping the engine (not just swallowing)
-            # matters: otherwise every subsequent frame re-raises and
-            # re-toasts.
-            try:
-                fired = wake_engine.feed(data)
-            except Exception as e:
-                print(f"[listener] Wake engine died mid-run, falling back to text wake: {e}")
-                _notify("Wake engine failed",
-                        "Falling back to transcription-based wake -- check the journal.",
-                        gui_env=gui_env)
-                wake_engine = None
-                fired = False
-            if fired:
-                command_window = commands.get_command_window()
-                matched_since_wake = False
-                # Provisional until whisper's transcript confirms it (below).
-                audio_wake_unconfirmed = confirm_threshold > 0
-                # Score goes to the JOURNAL only -- a false fire and a genuine
-                # wake look identical without it (s33 spent a day blind), but
-                # it's diagnostic noise in the user-facing Settings log, which
-                # stays identical to the other two wake paths below.
-                # "verified" marks a VERIFIER probability (~0.68-0.95 on a
-                # genuine wake), not a base-model score (~0.99) -- never
-                # compare the two across that boundary.
-                score = getattr(wake_engine, "last_score", 0.0)
-                tag = " verified" if getattr(wake_engine, "verified", False) else ""
-                print(f"[listener] Wake word detected (audio engine,{tag} score {score:.3f}).")
-                # Write the audio that just fired, if capture is on. Wrapped
-                # so a disk/permissions fault in a diagnostic can never take
-                # down the wake path; cleared after so the next fire's dump
-                # doesn't carry this one's tail.
-                if wake_ring is not None:
-                    try:
-                        path = wake_dump.dump(wake_dump_dir, wake_ring.snapshot(), score)
-                        print(f"[listener] Wake audio dumped -> {path}")
-                    except Exception as e:
-                        print(f"[listener] Wake audio dump failed: {e}")
-                    wake_ring.clear()
-                log("Wake word detected")
-                _notify_general("Listening...", timeout_ms=command_window * 1000, gui_env=gui_env)
-                set_state(State.LISTENING)
-                command_window_start = now
-                print("[listener] -> LISTENING (audio wake)")
-
         event = rec.feed(data)
         if event is None:
             # Backend has nothing to report for this chunk (e.g. a batch
@@ -525,10 +405,9 @@ def run_listener(
         if event.kind == "error":
             # Transcription failed (whisper-server down/unreachable). Warn
             # LOUDLY and ONCE per outage -- bare _notify so the Options-tab
-            # toggle can't silence "your app can't hear you". This is
-            # separate from the audio-wake silent-revert on purpose: the
-            # revert stays quiet for genuine phantoms, while THIS names the
-            # real cause so an outage never looks like a dead app again.
+            # toggle can't silence "your app can't hear you". Naming the
+            # real cause is the point: an outage must never present as a
+            # dead app with a healthy tray icon.
             if not transcription_down:
                 transcription_down = True
                 print(f"[listener] Transcription unavailable: {event.text}")
@@ -644,15 +523,12 @@ def run_listener(
             # real command -- do NOT toast "No match". Refresh the window so
             # the user gets the full command window from this acknowledgement.
             if detector.is_wake_only(text):
-                # The wake word, transcribed -- a real wake. Confirms an audio
-                # fire; keep listening for the command.
-                audio_wake_unconfirmed = False
+                # The wake word, transcribed -- keep listening for the command.
                 print("[listener] Wake-only utterance, still listening.")
                 command_window_start = now
                 continue
 
             if _is_open_mic_command(text):
-                audio_wake_unconfirmed = False
                 set_state(State.OPEN_MIC)
                 _notify_general("Open mic enabled", "Say 'close mic' to return to normal.", gui_env=gui_env)
                 print("[listener] -> OPEN_MIC")
@@ -660,8 +536,6 @@ def run_listener(
                 continue
 
             if commands.try_match(text, gui_env, context):
-                # A command ran -- unambiguously a real wake.
-                audio_wake_unconfirmed = False
                 if context.pending_confirm:
                     enter_confirming(State.LISTENING, now)
                 elif per_segment:
@@ -674,17 +548,6 @@ def run_listener(
                 else:
                     print("[listener] Command matched, back to sleep.")
                     set_state(State.SLEEPING)
-            elif audio_wake_unconfirmed and not detector.fuzzy_check(text, confirm_threshold):
-                # Total miss on a still-unconfirmed AUDIO wake, and whisper's
-                # text carries no wake word either -> this was a false fire.
-                # Sleep SILENTLY: no wrong command ran, and the user never
-                # caused it, so "No match" would just be noise. A real wake
-                # whose command simply didn't match DOES carry the wake word,
-                # so it clears the flag above (fuzzy_check) and falls to the
-                # normal "No match" toast below.
-                audio_wake_unconfirmed = False
-                print(f"[listener] Audio wake unconfirmed by text '{text}' (silent).")
-                set_state(State.SLEEPING)
             else:
                 # Total miss -- nothing in the utterance matched (a partial
                 # chain that matched >=1 segment returns True above and never
@@ -696,7 +559,6 @@ def run_listener(
                 # commands._notify_nomatch. Without it the user only learns
                 # that something failed, not which mishearing to write an
                 # override for -- and the two paths read inconsistently.
-                audio_wake_unconfirmed = False
                 print("[listener] No match, back to sleep.")
                 _notify_general("No match", f"'{text}'", gui_env=gui_env)
                 log(f"No match: '{text}'")

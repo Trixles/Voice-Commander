@@ -919,25 +919,7 @@ companion — keep them in sync.
     False — nothing matched at all) toasts "No match" ONCE and returns to
     SLEEPING immediately. A partial-good chain returns True from `try_match`
     (see "Chains partial-execute") and never reaches this path, so its
-    per-segment toasts are unaffected. EXCEPTION for an unconfirmed audio
-    wake — see "Audio-wake text confirmation" below.
-  - **Audio-wake text confirmation (s34):** config `wake_confirm` (fuzzy
-    threshold 0–1, default 0.7; 0 disables). An AUDIO wake acks on sound
-    before any transcript exists, so it is *provisional*: the listener sets
-    an `audio_wake_unconfirmed` flag on fire and clears it the moment
-    whisper's text confirms the wake — either `is_wake_only`, a command
-    match, or `detector.fuzzy_check(text, threshold)` finding the wake word.
-    If instead the first final is a total miss whose text carries NO wake
-    word (fuzzy), OR the command window simply expires with the flag still
-    set, the wake was a FALSE FIRE: the listener sleeps SILENTLY, suppressing
-    the "No match" toast the rule above would otherwise fire. Zero added
-    latency — the ack already happened; only a phantom's revert is deferred.
-    A TEXT wake carries the wake word by construction, so the flag is never
-    set for it and its misses still nag normally. Trades the occasional
-    silenced phantom against a missed real wake when whisper badly mangles
-    the wake word ("computer"→"peter", ~0.6, below 0.7) — `wake_confirm`
-    tunes where that line sits; `fuzzy_check` lives in `core/wake.py`
-    (stdlib `difflib`, whole-word-then-fuzzy).
+    per-segment toasts are unaffected.
   - **Per-segment chains (s30):** recognizers advertise
     `per_segment_finals` (True on WhisperRecognizer; False is the seam
     default for streaming backends).
@@ -951,36 +933,13 @@ companion — keep them in sync.
     "No match" toast is only for a wake that never produced a command.
     `_normalize` also strips a leading "and " (chain glue on follow-up
     segments). Default-mode behavior (match → sleep) is unchanged.
-  - **Audio wake engine (s31):** with config `wake_engine=openwakeword`,
-    an `OpenWakeWordEngine` (`core/wakeword.py`; model file from
-    `DATA_DIR/wakewords/<wake_model>.onnx`, threshold `wake_threshold`)
-    is fed each chunk ONLY in SLEEPING; a fire acknowledges the wake
-    instantly (~100-200ms) via the same ack path as text wake. The
-    recognizer still consumes the same chunks, and the wake utterance's
-    eventual final is absorbed by the existing rules (wake-only →
-    swallowed; wake+command → matcher tolerates the prefix) — audio
-    wake adds NO new states. The engine resets its own rolling state on
-    fire so re-entering SLEEPING can't re-fire on stale audio.
-    `wake_engine=text` (default) keeps classic transcription-based
-    wake. openwakeword installs `--no-deps` (its tflite-runtime dep
-    has no py3.13+ wheels; onnx path only — see install.sh).
-  - **Speaker verifier (s34):** config `wake_verifier` (file stem in
-    `DATA_DIR/wakewords/`, `.pkl`, empty = off, shipped off) adds
-    openWakeWord's second-stage verifier: a frame scoring at or above
-    `custom_verifier_threshold` is re-scored by the verifier, whose
-    output REPLACES the base score. VC pins that gate to
-    `wake_threshold`, so the verifier only ever sees frames that would
-    have fired — it can veto, never promote. It exists to kill VOCAL
-    false fires the Silero gate cannot touch (coughs at 0.567-0.998,
-    measured 2026-07-28; Silero correctly rates a cough as speech). The
-    `.pkl` is a VOICEPRINT: user data, trained per-user by
-    `benchmark/train_v2_verifier.py`, shipped with nothing. Never accept
-    someone else's — beyond privacy and the accuracy hit of another
-    person's voiceprint, oww `pickle.load`s the file, so a dropped-in
-    `.pkl` is arbitrary code running at engine construction. A verifier
-    that fails to load leaves oww running UNVERIFIED with an always-on
-    toast — it does NOT degrade to text wake, because losing the fast
-    ack is the worse regression.
+
+  (Historical: an openWakeWord AUDIO wake engine + speaker verifier +
+  text-confirmation layer ran s31–s39 and was REMOVED in the s40 scrub.
+  Ruling: ~50 silent false fires/day over media, and a public app's wake
+  must be plug-and-play — a custom-trained wake model isn't. Text wake
+  is THE wake path. See the Voice-Commander-Vosk archive era and git
+  history at the scrub commit for the full design.)
 - **Why:** Pre-fix, feedback waited for finalize, so "Listening…" arrived ~1.5s
   late or simultaneously with execution. And a no-match used to leave you in
   LISTENING, so the command-window-expiry path fired a SECOND "No match" — two
@@ -989,22 +948,9 @@ companion — keep them in sync.
 - **Don't:** Gate wake detection on finalized results only. Make the command
   window wall-clock again. Toast on a wake-only utterance. Leave LISTENING after
   a total miss (reintroduces the double "No match"). Assume a partial-good chain
-  reaches the listener's no-match branch — it doesn't. Set
-  `custom_verifier_threshold` above `wake_threshold` (opens a window of
-  unverified fires — the measured 0.567 cough lives there). Key
-  `custom_verifier_models` by anything but the `.onnx` stem (oww's constructor
-  RAISES `ValueError` when a key matches no loaded base model — the factory
-  catches it and degrades to an unverified engine, so the wake word ends up
-  unprotected while the config claims otherwise). Drop `wake_threshold` below
-  0.5 while a verifier is configured — oww captures the verifier's training
-  features at a hardcoded `threshold=0.5` (`custom_verifier_model.py`), so a
-  lower gate asks it to rule on frames outside its training distribution.
-  Compare a verified score against an unverified one — different quantities
-  from different models. Let a failed verifier load reach the listener's
-  text-wake degrade. Commit a `.pkl` to the repo. Apply `wake_confirm`'s
-  silent-revert to a TEXT wake (it is self-confirmed; silencing its misses
-  would hide real failures). Forget to clear `audio_wake_unconfirmed` on any
-  LISTENING exit — a leaked flag would silence a later genuine miss.
+  reaches the listener's no-match branch — it doesn't. Resurrect the audio
+  wake engine in VC (the s39 ruling stands; oww may live again on a future
+  Home Assistant box, never here).
 
 ### Wake-word matching is whole-word, not substring
 - **What:** `WakeWordDetector.check()` (`core/wake.py`) matches each wake word on

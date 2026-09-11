@@ -40,18 +40,10 @@ HANDOFF.md
 # outside the repo if you want a backup.
 commands.json
 
-# -- Whisper benchmark scratch (models + recorded samples, hundreds of MB) ----
-# `benchmark/*`, NOT `benchmark/` -- git does not descend into an ignored
-# DIRECTORY, so a trailing-slash form makes the negation below impossible.
-# The trainer is tracked because it is the only means of rebuilding the
-# wake verifier .pkl; it must stay dependency-free of its untracked
-# neighbours (see the inlined helpers at the top of it).
+# -- Benchmark scratch (models + recorded samples, hundreds of MB) ------------
+# Local evaluation material only (whisper spikes, retired oww corpus kept
+# as possible Home Assistant material) -- nothing in here is tracked.
 benchmark/*
-# The evaluation harness is ~900MB of models, venv and audio -- ignored.
-# These two scripts are the exception: they are how the wake word gets
-# retrained and certified, so losing them loses the ability to do either.
-!benchmark/train_v2_verifier.py
-!benchmark/soak_wakeword.py
 
 # -- Logs / temp --------------------------------------------------------------
 *.log

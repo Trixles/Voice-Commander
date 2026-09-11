@@ -136,9 +136,9 @@ class WhisperRecognizer:
             # icon. systemd is restarting the server (Restart=on-failure);
             # the next segment gets a fresh chance. Surface it as an
             # "error" event (not None) so the listener can warn the user
-            # LOUDLY that transcription is down -- otherwise the audio-wake
-            # silent-revert hides a real outage as if every wake were a
-            # phantom (the ggml-0.20 breakage, 2026-08-17).
+            # LOUDLY that transcription is down -- an outage must never
+            # present as a dead app with a healthy tray icon (the
+            # ggml-0.20 breakage, 2026-08-17).
             print(f"[recognizer] transcribe failed, segment dropped: {e}")
             return RecognizerEvent(kind="error", text=str(e))
         text = _clean_whisper_text(raw)

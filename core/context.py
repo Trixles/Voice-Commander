@@ -28,6 +28,16 @@ class Context:
         self.last_monitor: int | None = None
         self.pending_confirm: dict | None = None   # command dict awaiting confirmation
         self.pending_args: dict | None = None      # resolved args for pending command
+        # Auto-pause-on-wake bookkeeping (see core/media_control.py and the
+        # set_state hook in core/listener.py):
+        #   auto_paused_players -- names of MPRIS players THIS wake window
+        #     paused; resumed by name when the window closes. Also read by the
+        #     Celery Man echo guard so a video WE paused still counts as an echo.
+        #   media_touched -- set by media actions (media_pause/resume, open_url,
+        #     and thus celery_man) during a wake window; suppresses auto-resume
+        #     so a command that managed media isn't fought on the way out.
+        self.auto_paused_players: list[str] = []
+        self.media_touched: bool = False
 
     def update(self, **kwargs):
         for k, v in kwargs.items():

@@ -45,6 +45,12 @@ def open_url(url: str, gui_env: dict, browser: str = "", context=None) -> None:
         run_bg(["xdg-open", url], env=gui_env, detach=True)
     threading.Thread(target=_raise_browser, args=(gui_env,), daemon=True).start()
     if context:
+        # Deliberately does NOT set media_touched: most URLs (a webpage, a
+        # search) start no audio, and flagging them would strand the pre-wake
+        # music paused for nothing. Whether resuming would stack over media
+        # this URL started is decided by REALITY at resume time (the listener
+        # re-checks what's actually playing), not pessimistically here. An
+        # action that KNOWS it autoplays (celery_man) sets the flag itself.
         context.update(last_command_name="open_url")
 
 
@@ -57,7 +63,7 @@ CELERY_MAN_URL = "https://www.youtube.com/watch?v=maAFcEU6atk"
 _CELERY_MAN_VIDEO_ID = CELERY_MAN_URL.split("v=")[-1]
 
 
-def _celery_man_is_playing(gui_env: dict) -> bool:
+def _celery_man_is_playing(gui_env: dict, context=None) -> bool:
     """
     Return True if the Celery Man video is currently PLAYING in any MPRIS
     media player (browsers expose playing tabs over MPRIS; playerctl is
@@ -65,7 +71,12 @@ def _celery_man_is_playing(gui_env: dict) -> bool:
 
     Matched by video ID in the reported URL, falling back to the title for
     browsers that don't expose xesam:url. Paused doesn't count: no audio
-    means no echo, so a repeat command is genuinely the user.
+    means no echo, so a repeat command is genuinely the user -- EXCEPT a
+    player auto-pause paused THIS wake window (context.auto_paused_players).
+    That video is really playing, just suppressed by auto-pause-on-wake; the
+    echo utterance can still slip in before the pause lands, so treat our own
+    paused celery player as an echo or the guard fails open mid-echo (the
+    exact hole the auto-pause feature would otherwise punch).
 
     Fails OPEN: if playerctl is missing, errors, or reports no players, the
     command fires normally -- a broken check must never block the command.
@@ -73,7 +84,7 @@ def _celery_man_is_playing(gui_env: dict) -> bool:
     try:
         result = run_capture(
             ["playerctl", "-a", "metadata", "--format",
-             "{{status}}\t{{xesam:url}}\t{{xesam:title}}"],
+             "{{playerName}}\t{{status}}\t{{xesam:url}}\t{{xesam:title}}"],
             env=gui_env, timeout=3,
         )
     except Exception as e:
@@ -81,12 +92,16 @@ def _celery_man_is_playing(gui_env: dict) -> bool:
         return False
     if result.returncode != 0:  # typically "No players found"
         return False
+    paused_by_us = set(getattr(context, "auto_paused_players", None) or [])
     for line in result.stdout.splitlines():
-        status, _, rest = line.partition("\t")
-        if status.strip() != "Playing":
+        name, status, url, title = (line.split("\t", 3) + ["", "", "", ""])[:4]
+        is_celery = _CELERY_MAN_VIDEO_ID in url or "celery man" in title.lower()
+        if not is_celery:
             continue
-        url, _, title = rest.partition("\t")
-        if _CELERY_MAN_VIDEO_ID in url or "celery man" in title.lower():
+        if status.strip() == "Playing":
+            return True
+        # We paused it a moment ago on wake -> still an echo, block the relaunch.
+        if status.strip() == "Paused" and name.strip() in paused_by_us:
             return True
     return False
 
@@ -101,10 +116,20 @@ def celery_man(gui_env: dict, context=None):
     suppresses the notification and log line too, so an echo is fully silent.
     No wake words are muted; every other command stays fully usable while the
     video plays, and the guard ends the instant the video does.
+
+    A genuine fire marks the wake window media_touched so auto-pause won't
+    resume the pre-wake music on top of the video -- and it must be set HERE,
+    not in open_url, because the celery clip autoplays with load latency: the
+    wake window can close before the video starts, so the listener's
+    "is anything new playing?" resume check would miss it and stack the old
+    music over it. The echo-block path returns BEFORE this, so a blocked echo
+    leaves media_touched False and auto-resumes the very video it guarded.
     """
-    if _celery_man_is_playing(gui_env):
+    if _celery_man_is_playing(gui_env, context):
         print("[apps] celery_man: video already playing -- echo blocked")
         return False
+    if context:
+        context.update(media_touched=True)
     open_url(CELERY_MAN_URL, gui_env=gui_env, context=context)
 
 

@@ -60,14 +60,14 @@ def test_action_opens_url_when_not_playing(monkeypatch):
 def test_echo_block_returns_false_to_suppress_notification(monkeypatch):
     """A blocked echo must return False -- the dispatcher's cue to skip the
     'Loading up Celery Man' toast, cooldown stamp, and log line entirely."""
-    line = f"Playing\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
+    line = f"firefox\tPlaying\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
     _patch(monkeypatch, _playerctl_result(line))
     assert apps.celery_man(gui_env={}, context=Context()) is False
 
 
 def test_echo_blocked_while_video_is_playing_by_url(monkeypatch):
     """The clip echoing its own launch phrase must not open a second copy."""
-    line = f"Playing\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
+    line = f"firefox\tPlaying\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
     opened = _patch(monkeypatch, _playerctl_result(line))
     apps.celery_man(gui_env={}, context=Context())
     assert opened == {}
@@ -75,23 +75,57 @@ def test_echo_blocked_while_video_is_playing_by_url(monkeypatch):
 
 def test_echo_blocked_by_title_when_no_url_exposed(monkeypatch):
     """Some browsers expose title but not URL over MPRIS -- title suffices."""
-    line = "Playing\t\tTim and Eric - CELERY MAN (HD)"
+    line = "firefox\tPlaying\t\tTim and Eric - CELERY MAN (HD)"
     opened = _patch(monkeypatch, _playerctl_result(line))
     apps.celery_man(gui_env={}, context=Context())
     assert opened == {}
 
 
+def test_echo_blocked_when_our_autopause_paused_the_video(monkeypatch):
+    """Auto-pause-on-wake pauses the celery video on a phantom wake, but the
+    echo utterance can still slip through before the pause lands. A player WE
+    paused this window (context.auto_paused_players) must still count as an
+    echo, or the guard fails open and relaunches over the paused video."""
+    line = f"firefox\tPaused\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
+    opened = _patch(monkeypatch, _playerctl_result(line))
+    ctx = Context()
+    ctx.auto_paused_players = ["firefox"]
+    apps.celery_man(gui_env={}, context=ctx)
+    assert opened == {}
+
+
 def test_fires_when_video_is_paused(monkeypatch):
-    """Paused = no audio = no echo risk; a repeat command is genuinely the user."""
-    line = f"Paused\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
+    """Paused = no audio = no echo risk; a repeat command is genuinely the
+    user -- UNLESS auto-pause paused it (see the test above). With no
+    auto-paused players, a paused video means the user paused it themselves."""
+    line = f"firefox\tPaused\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
     opened = _patch(monkeypatch, _playerctl_result(line))
     apps.celery_man(gui_env={}, context=Context())
     assert opened["url"] == apps.CELERY_MAN_URL
 
 
+def test_fire_marks_media_touched(monkeypatch):
+    """A genuine fire flags the wake window so auto-pause won't resume the
+    pre-wake music over the (autoplaying, load-delayed) celery video."""
+    _patch(monkeypatch, _playerctl_result("No players found", 1))
+    ctx = Context()
+    apps.celery_man(gui_env={}, context=ctx)
+    assert ctx.media_touched is True
+
+
+def test_echo_block_leaves_media_touched_false(monkeypatch):
+    """A blocked echo returns before the flag is set, so the window's close
+    auto-resumes the very video the guard protected."""
+    line = f"firefox\tPlaying\t{apps.CELERY_MAN_URL}\tTim and Eric - Celery Man"
+    _patch(monkeypatch, _playerctl_result(line))
+    ctx = Context()
+    apps.celery_man(gui_env={}, context=ctx)
+    assert ctx.media_touched is False
+
+
 def test_fires_when_other_media_is_playing(monkeypatch):
     """Unrelated playing media must not block the command."""
-    line = "Playing\thttps://www.youtube.com/watch?v=dQw4w9WgXcQ\tsome other video"
+    line = "spotify\tPlaying\thttps://www.youtube.com/watch?v=dQw4w9WgXcQ\tsome other video"
     opened = _patch(monkeypatch, _playerctl_result(line))
     apps.celery_man(gui_env={}, context=Context())
     assert opened["url"] == apps.CELERY_MAN_URL

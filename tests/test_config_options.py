@@ -55,6 +55,18 @@ def test_notifications_enabled_reads_config():
     assert commands.notifications_enabled() is False
 
 
+# -- get_auto_pause_media -----------------------------------------------------
+
+def test_auto_pause_media_defaults_true():
+    commands._config = {}
+    assert commands.get_auto_pause_media() is True
+
+
+def test_auto_pause_media_reads_config():
+    commands._config = {"auto_pause_media": False}
+    assert commands.get_auto_pause_media() is False
+
+
 # -- global threshold gates matching ------------------------------------------
 
 def test_global_threshold_gates_non_slot_matching():

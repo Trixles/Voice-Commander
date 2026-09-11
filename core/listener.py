@@ -38,8 +38,62 @@ from core.recognizer import SAMPLE_RATE
 from core.run import get_default_source
 from core.wake import WakeWordDetector
 import core.commands as commands
+import core.media_control as media_control
 import core.overrides as overrides
 from core import wake_dump
+
+
+# States that make up the transient "wake window": the app is awake and
+# actively listening for (or confirming) a command. OPEN_MIC is deliberately
+# NOT here -- auto-pause is scoped to the transient wake only, so a false wake
+# briefly pauses music, but toggling always-on open mic never touches media.
+_WAKE_WINDOW_STATES = frozenset({State.LISTENING, State.CONFIRMING})
+
+
+def _auto_pause_on_wake(context: Context, gui_env: dict) -> None:
+    """Entering the wake window from SLEEPING: pause whatever is playing and
+    remember it. Opens a fresh media-touched window (reset the flag) so a
+    command in THIS window can veto the resume."""
+    if not commands.get_auto_pause_media():
+        return
+    context.update(media_touched=False)
+    playing = media_control.list_playing_players(gui_env)
+    if playing:
+        media_control.pause_players(playing, gui_env)
+        context.update(auto_paused_players=list(playing))
+        print(f"[listener] Auto-paused media on wake: {playing}")
+    else:
+        context.update(auto_paused_players=[])
+
+
+def _auto_resume_after_wake(context: Context, gui_env: dict) -> None:
+    """Leaving the wake window: resume exactly the players we paused, unless a
+    command touched media this window (media_touched) -- in which case the user
+    is managing playback and we leave it alone. We always resume what WE paused
+    regardless of the toggle's current state: the toggle gates whether we START
+    pausing, not whether we honor an in-flight pause."""
+    paused = context.auto_paused_players
+    if not paused:
+        return
+    # Clear first so a mid-resume exception can't strand a stale snapshot that
+    # would double-resume on the next window.
+    context.update(auto_paused_players=[])
+    # Predicate 1 (intent): a command deliberately set playback this window
+    # (pause/play, or a knowingly-autoplaying action like celery_man). Honor it.
+    if context.media_touched:
+        print(f"[listener] Auto-resume suppressed (media touched this window): {paused}")
+        return
+    # Predicate 2 (reality): don't stack. If media we DIDN'T pause is playing
+    # now -- e.g. a URL command opened an autoplaying page -- resuming the
+    # pre-wake audio on top of it would double up. Ask what's actually playing
+    # rather than guessing from the command; anything not in our snapshot is new.
+    now_playing = media_control.list_playing_players(gui_env)
+    new_media = [p for p in now_playing if p not in set(paused)]
+    if new_media:
+        print(f"[listener] Auto-resume suppressed (new media playing: {new_media})")
+        return
+    media_control.resume_players(paused, gui_env)
+    print(f"[listener] Auto-resumed media: {paused}")
 
 
 def _notify_general(*args, **kwargs) -> None:
@@ -222,6 +276,15 @@ def run_listener(
     command_queue -- if provided, check each loop for 'toggle_open_mic' / 'quit'
     """
     def set_state(new_state):
+        # Auto-pause hook: the single transition chokepoint, so pause/resume
+        # tracks the wake window no matter which of the many wake/sleep paths
+        # fired. Guarded to the SLEEPING<->wake-window boundary so it ignores
+        # in-window churn (LISTENING<->CONFIRMING) and the OPEN_MIC paths.
+        prev_state = context.state
+        if prev_state == State.SLEEPING and new_state in _WAKE_WINDOW_STATES:
+            _auto_pause_on_wake(context, gui_env)
+        elif prev_state in _WAKE_WINDOW_STATES and new_state not in _WAKE_WINDOW_STATES:
+            _auto_resume_after_wake(context, gui_env)
         context.state = new_state
         if state_queue is not None:
             state_queue.put(new_state)

@@ -6,8 +6,9 @@ Launch on login, Enable notifications, Recognition strictness. Bottom: the
 About blurb + version footer, now a subsection here.
 
 `build(dialog)` creates the controls and stores them on `dialog`
-(`_autostart_toggle`, `_notifications_toggle`, `_strictness_slider`) so
-dialog.py can wire dirty-tracking (in `_build_ui`) and persist them on Save.
+(`_autostart_toggle`, `_notifications_toggle`, `_auto_pause_toggle`,
+`_strictness_slider`) so dialog.py can wire dirty-tracking (in `_build_ui`)
+and persist them on Save.
 Notifications + strictness are config-backed; autostart is external systemd
 state, read at dialog-open into `dialog._orig_autostart` (None = unavailable).
 """
@@ -82,6 +83,18 @@ def build(dialog: "SettingsDialog") -> QWidget:
         "Show desktop notifications for command activations, open mic toggle, "
         "errors, etc. Confirmation prompts for shutdown, restart, and logout "
         "commands ALWAYS trigger notifications, even with this setting disabled."
+    ))
+
+    # -- Auto-pause media on wake (config-backed) -----------------------------
+    dialog._auto_pause_toggle = ToggleSwitch()
+    dialog._auto_pause_toggle.setChecked(bool(dialog._config.get("auto_pause_media", True)))
+    cl.addWidget(_control_row("Auto-pause media on wake", dialog._auto_pause_toggle))
+    cl.addWidget(_help(
+        "When the wake word is heard, pause anything that's playing so it "
+        "doesn't talk over your command, then resume it when Voice Commander "
+        "goes back to sleep. If a command changes playback (pause, play, or "
+        "opening a link) the media stays as the command left it. Open Mic mode "
+        "is never affected."
     ))
 
     # -- Recognition strictness (config-backed match threshold) ---------------

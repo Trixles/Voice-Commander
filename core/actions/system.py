@@ -102,11 +102,19 @@ def unmute(gui_env: dict, context=None) -> None:
 def media_pause(gui_env: dict, context=None) -> None:
     """Pause the active MPRIS media player."""
     run_bg(["playerctl", "pause"], env=gui_env)
+    # The user is managing playback this wake window -> don't let auto-pause
+    # resume on the way out (they asked for pause; keep it paused).
+    if context:
+        context.update(media_touched=True)
 
 
 def media_resume(gui_env: dict, context=None) -> None:
     """Resume the active MPRIS media player."""
     run_bg(["playerctl", "play"], env=gui_env)
+    # Same reasoning: a spoken resume already restarted playback, so the
+    # window's auto-resume must not second-guess it.
+    if context:
+        context.update(media_touched=True)
 
 
 # -- Power --------------------------------------------------------------------

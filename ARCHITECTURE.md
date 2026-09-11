@@ -880,15 +880,22 @@ companion — keep them in sync.
 
 ### Settings "Options" tab (renamed from "About" in 0.9.0)
 - **What (0.9.0):** `core/settings/tabs/options_tab.py` (was about_tab.py) holds
-  the Launch-on-login, Enable-notifications, and Recognition-strictness controls,
-  then the old About blurb + version footer as a subsection. Registered in
-  dialog.py as `_build_options_tab` / `addTab(..., "Options")` and in
-  `_tab_reset_map` → `_reset_options`, which (like every per-tab reset) is
-  IMMEDIATE: confirm → write defaults → reload → close. Reset defaults:
-  notifications on, strictness 0.75, AND launch-on-login OFF (an immediate
-  `systemctl disable`, since reset is not Save-gated). install.sh ships an
-  app-menu `.desktop` (Icon = `vc-listening.svg`, the same icon the settings
-  window already uses).
+  the Launch-on-login, Enable-notifications, Auto-pause-media-on-wake, and
+  Recognition-strictness controls, then the old About blurb + version footer as
+  a subsection. Registered in dialog.py as `_build_options_tab` /
+  `addTab(..., "Options")` and in `_tab_reset_map` → `_reset_options`, which
+  (like every per-tab reset) is IMMEDIATE: confirm → write defaults → reload →
+  close. Reset defaults: notifications on, auto-pause-media on, strictness 0.75,
+  AND launch-on-login OFF (an immediate `systemctl disable`, since reset is not
+  Save-gated). install.sh ships an app-menu `.desktop` (Icon =
+  `vc-listening.svg`, the same icon the settings window already uses).
+- **Adding an Options toggle (the pattern, from `auto_pause_media`):** a
+  config-backed toggle touches five spots — build it in `options_tab.py`
+  (`dialog._<name>_toggle`), wire `.toggled → _mark_dirty` and snapshot it in
+  `_form_state()` (both in dialog.py `_build_ui`), persist it in `_save`, seed
+  the default in `_reset_options`'s `mutate`, and add the key to
+  `core/commands.py --emit-defaults`. Miss `_form_state` and the Save button
+  won't arm on that toggle; miss emit-defaults and fresh installs lack the key.
 - **Why:** A real home for app-wide options; About demoted to a subsection
   (Tyler rewrites the blurb later).
 - **Don't:** Assume Restore Defaults is Save-gated (it writes + closes
@@ -1018,11 +1025,17 @@ companion — keep them in sync.
 - **What:** The clip's own audio says its launch phrase ("computer, load up
   celery man please"), so unguarded it would launch copies of itself. The
   dedicated action (`core/actions/apps.py::celery_man`) guards by asking
-  reality, not a timer: `_celery_man_is_playing()` runs one `playerctl -a
-  metadata` call (playerctl is already a hard dependency — pause/resume) and
-  blocks the command iff some MPRIS player reports status `Playing` with the
+  reality, not a timer: `_celery_man_is_playing(gui_env, context)` runs one
+  `playerctl -a metadata` call (playerctl is already a hard dependency —
+  pause/resume) formatted `{{playerName}}\t{{status}}\t{{xesam:url}}\t{{xesam:title}}`,
+  and blocks the command iff some MPRIS player reports status `Playing` with the
   video ID in `xesam:url` (fallback: "celery man" in `xesam:title`, for
-  browsers that don't expose url). Paused doesn't count — no audio, no echo.
+  browsers that don't expose url). Paused doesn't count — no audio, no echo —
+  **EXCEPT** a player whose name is in `context.auto_paused_players` (the
+  auto-pause-on-wake feature paused the video a beat ago; the echo utterance
+  can still land before the pause does, so a `Paused` celery player WE paused
+  still counts as an echo, or the guard fails open mid-echo). `playerName` is
+  in the format string precisely to test that membership.
   The check FAILS OPEN (playerctl missing/erroring/no players → fire
   normally) and runs only when celery_man matches, so it costs other
   commands nothing. NO wake words are muted; every command stays usable
@@ -1043,7 +1056,63 @@ companion — keep them in sync.
 - **Don't:** Route it through `open_url` (breaks the system-command tiering).
   Replace the playing-check with a timer. Match on the full URL (players
   append params; match the video ID). Fail CLOSED on playerctl errors (a
-  broken check must never block the command). Treat `Paused` as playing.
+  broken check must never block the command). Treat `Paused` as playing
+  UNCONDITIONALLY (only a player in `auto_paused_players` counts — a video the
+  USER paused is a genuine repeat, and must still fire).
+
+### Auto-pause media on wake: hook `set_state`, resume by name, honor media_touched
+- **What:** When a wake opens the transient wake window, VC pauses whatever is
+  playing and resumes it when the window closes. The hook lives at the single
+  transition chokepoint `set_state` in `core/listener.py`: entering the window
+  from SLEEPING (`SLEEPING → {LISTENING, CONFIRMING}` per `_WAKE_WINDOW_STATES`)
+  calls `_auto_pause_on_wake`; leaving it (`{LISTENING, CONFIRMING} → not-window`)
+  calls `_auto_resume_after_wake`. Pausing snapshots the names of players
+  reporting `Playing` (`core/media_control.py::list_playing_players`, one
+  `playerctl -a` call), pauses each with `playerctl -p <name> pause`, and
+  records the names in `context.auto_paused_players`; resume replays exactly
+  those names with `playerctl -p <name> play`. A player VC didn't pause is
+  never touched. PAUSE, not duck. Config: `auto_pause_media` bool, default ON,
+  Options tab, read LIVE at wake via `commands.get_auto_pause_media()`.
+- **Scope is the transient wake ONLY, never OPEN_MIC:** `_WAKE_WINDOW_STATES`
+  excludes OPEN_MIC, so `SLEEPING → OPEN_MIC` (tray/voice) never pauses, and a
+  real wake that gets promoted `LISTENING → OPEN_MIC` RESUMES (the window
+  ended). Tyler's hard no: false wakes in always-on mode would pause media
+  constantly and erode trust.
+- **Resume suppression = TWO orthogonal predicates, both reality/intent-based,
+  neither a hardcoded URL/name list:**
+  1. **`context.media_touched` (intent):** per-window flag reset at pause time,
+     SET by actions that DELIBERATELY set playback — `media_pause`,
+     `media_resume` (`core/actions/system.py`), and `celery_man`
+     (`core/actions/apps.py`). Set → skip resume (the user/command owns the
+     audio now). Generic `open_url` does NOT set it (most URLs start no audio;
+     flagging them stranded music paused after "open github" — Tyler, s37).
+     `celery_man` sets it ITSELF (not via `open_url`) because the clip
+     autoplays with load latency: the window can close before the video
+     starts, so predicate 2 would miss it. Its echo-block path returns BEFORE
+     the flag, so a blocked echo leaves it False and AUTO-RESUMES the very
+     video it guarded.
+  2. **New-media-at-resume (reality):** `_auto_resume_after_wake` re-queries
+     `list_playing_players` and, if anything NOT in the paused snapshot is
+     playing, skips resume — a URL command that opened an autoplaying page
+     shouldn't get the pre-wake audio stacked on top. Asks what's actually
+     playing rather than guessing from the command (the same
+     ask-reality-not-a-list philosophy as the celery guard).
+- **Resume always honors an in-flight pause:** `_auto_resume_after_wake` does
+  NOT re-check the toggle — flipping `auto_pause_media` off mid-window must not
+  strand paused music. The toggle gates whether pausing STARTS, not whether a
+  pause already taken is honored. The snapshot is cleared even when resume is
+  suppressed, so a stale pause can't leak into the next window.
+- **Don't:** Hook individual transitions instead of `set_state` (there are
+  ~6 wake→listening paths; the chokepoint covers them all). Use bare
+  `playerctl pause`/`play` for the auto-restore (first-on-bus, so it could
+  resume a player it never paused — that's the by-name reason). Pause in
+  OPEN_MIC. Duck instead of pause. Re-check the toggle in resume. Let
+  `list_playing_players` raise into the listener loop (it fails safe to `[]`).
+- **Known wart (accepted):** the MANUAL `media_pause`/`media_resume` commands
+  still use bare first-on-bus `playerctl`, so a spoken "resume" during a window
+  where auto-pause paused player X may resume a different player. They correctly
+  set `media_touched`; only their internals are first-on-bus. By-name would
+  improve them too — deferred, not required.
 
 ### Power commands go through org.kde.Shutdown, not systemctl
 

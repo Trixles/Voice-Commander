@@ -522,6 +522,13 @@ def notifications_enabled() -> bool:
     return _config.get("notifications", True)
 
 
+def get_auto_pause_media() -> bool:
+    """Whether to auto-pause playing media on wake and resume it when the wake
+    window closes (Options tab toggle, default ON). Read live at wake time in
+    core/listener.py's set_state hook."""
+    return _config.get("auto_pause_media", True)
+
+
 def _mic_phrases(action: str, defaults: list[str]) -> set[str]:
     """Resolve the active phrase set for a mic toggle, in priority order:
 
@@ -1506,6 +1513,7 @@ if __name__ == "__main__":
             "command_window": 5,
             "match_threshold": DEFAULT_THRESHOLD,
             "notifications": True,
+            "auto_pause_media": True,
             "vosk_model": _DEFAULT_VOSK_MODEL_NAME,
             "recognizer_backend": "vosk",
             "whisper_model": "base.en",

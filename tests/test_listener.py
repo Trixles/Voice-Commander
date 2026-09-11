@@ -37,8 +37,15 @@ class ScriptedRecognizer:
 
 
 def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
-                rec_cls=ScriptedRecognizer, wake_engine=None):
-    """Drive run_listener over `events` and return the harness artifacts."""
+                rec_cls=ScriptedRecognizer, wake_engine=None,
+                playing_players=(), auto_pause=True):
+    """Drive run_listener over `events` and return the harness artifacts.
+
+    playing_players / auto_pause feed the auto-pause-on-wake hook: the hook
+    shells out to playerctl on every wake, so it's stubbed here so tests never
+    touch real media players (and never pause the developer's actual music).
+    `playing_players` is what the stub reports as Playing; the returned
+    `paused`/`resumed` lists record what the hook paused and resumed."""
     # LISTENING can only be entered through the wake path in production --
     # that's what arms command_window_start. Injecting the state directly
     # would trip the window-expiry check on the first loop (start time 0.0),
@@ -88,6 +95,18 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
     monkeypatch.setattr(commands, "get_close_mic_phrases", lambda: {"close mic"})
     monkeypatch.setattr(commands, "get_overrides", lambda: [])
 
+    # Auto-pause hook: stub playerctl so a wake never shells out. Records what
+    # the hook paused/resumed for assertions.
+    paused = []
+    resumed = []
+    monkeypatch.setattr(commands, "get_auto_pause_media", lambda: auto_pause)
+    monkeypatch.setattr(listener.media_control, "list_playing_players",
+                        lambda env: list(playing_players))
+    monkeypatch.setattr(listener.media_control, "pause_players",
+                        lambda names, env: paused.append(list(names)))
+    monkeypatch.setattr(listener.media_control, "resume_players",
+                        lambda names, env: resumed.append(list(names)))
+
     matched = []
     def _try_match(text, gui_env, context):
         matched.append(text)
@@ -125,6 +144,8 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
         "factories": factories,
         "notifications": notifications,
         "notification_sources": notification_sources,
+        "paused": paused,
+        "resumed": resumed,
     }
 
 
@@ -216,6 +237,69 @@ def test_full_wake_then_command_flow(monkeypatch):
     assert r["matched"] == ["open firefox"]
     assert r["states"][0] == State.LISTENING  # woke off the partial
     assert r["context"].state == State.SLEEPING
+
+
+# -- Auto-pause media on wake (integration through the real state machine) ----
+
+def test_auto_pause_pauses_on_wake_and_resumes_on_sleep(monkeypatch):
+    """Playing media is paused entering the wake window and resumed by name
+    when the command finishes and the app returns to SLEEPING."""
+    r = run_machine(
+        [
+            RecognizerEvent("partial", "computer"),    # wake -> pause
+            RecognizerEvent("final", "open firefox"),  # match -> sleep -> resume
+        ],
+        monkeypatch,
+        playing_players=["spotify"],
+    )
+    assert r["paused"] == [["spotify"]]
+    assert r["resumed"] == [["spotify"]]
+    assert r["context"].auto_paused_players == []
+    assert r["context"].state == State.SLEEPING
+
+
+def test_auto_pause_disabled_touches_nothing(monkeypatch):
+    r = run_machine(
+        [
+            RecognizerEvent("partial", "computer"),
+            RecognizerEvent("final", "open firefox"),
+        ],
+        monkeypatch,
+        playing_players=["spotify"],
+        auto_pause=False,
+    )
+    assert r["paused"] == []
+    assert r["resumed"] == []
+
+
+def test_auto_pause_nothing_playing_no_resume(monkeypatch):
+    """Wake with nothing playing pauses nothing, so there's nothing to resume."""
+    r = run_machine(
+        [
+            RecognizerEvent("partial", "computer"),
+            RecognizerEvent("final", "open firefox"),
+        ],
+        monkeypatch,
+        playing_players=[],
+    )
+    assert r["paused"] == []
+    assert r["resumed"] == []
+
+
+def test_entering_open_mic_ends_the_pause_window(monkeypatch):
+    """A real wake pauses media; promoting that window to OPEN_MIC ends the
+    transient window, so media resumes -- open mic itself never holds a pause."""
+    r = run_machine(
+        [
+            RecognizerEvent("partial", "computer"),  # wake -> pause
+            RecognizerEvent("final", "open mic"),    # LISTENING -> OPEN_MIC -> resume
+        ],
+        monkeypatch,
+        playing_players=["spotify"],
+    )
+    assert r["paused"] == [["spotify"]]
+    assert r["resumed"] == [["spotify"]]
+    assert r["context"].state == State.OPEN_MIC
 
 
 def test_speech_event_refreshes_command_window(monkeypatch):

@@ -136,6 +136,7 @@ class SettingsDialog(QDialog):
         self._orig_model_path = get_whisper_model_path()
 
         self._orig_notifications = self._config.get("notifications", True)
+        self._orig_auto_pause = self._config.get("auto_pause_media", True)
         self._orig_match_threshold = self._config.get("match_threshold", 0.75)
         self._orig_autostart = self._autostart_is_enabled()
 
@@ -186,7 +187,7 @@ class SettingsDialog(QDialog):
             "Displays":  (self._reset_displays,
                           "Reset every monitor's aliases to the shipped defaults (Display 1, Display 2, ...)."),
             "Options":   (self._reset_options,
-                          "Restore Options to defaults: notifications on, recognition strictness 0.75, and launch on login off."),
+                          "Restore Options to defaults: notifications on, auto-pause media on, recognition strictness 0.75, and launch on login off."),
         }
 
         btn_bar = QWidget()
@@ -225,6 +226,7 @@ class SettingsDialog(QDialog):
         for mrow in self._monitor_rows:
             mrow.dirtied.connect(self._mark_dirty)
         self._notifications_toggle.toggled.connect(self._mark_dirty)
+        self._auto_pause_toggle.toggled.connect(self._mark_dirty)
         self._strictness_slider.valueChanged.connect(self._mark_dirty)
         if self._orig_autostart is not None:
             self._autostart_toggle.toggled.connect(self._mark_dirty)
@@ -358,6 +360,7 @@ class SettingsDialog(QDialog):
             self._overrides_container.collect_disabled_defaults(),
             [row.collect() for row in self._monitor_rows],
             self._notifications_toggle.isChecked(),
+            self._auto_pause_toggle.isChecked(),
             self._strictness_slider.value(),
             self._selected_model_path,
             # Always readable: when systemctl is unavailable the toggle exists
@@ -600,6 +603,7 @@ class SettingsDialog(QDialog):
 
         # Options tab: notifications + recognition strictness are config-backed.
         new_config["notifications"] = self._notifications_toggle.isChecked()
+        new_config["auto_pause_media"] = self._auto_pause_toggle.isChecked()
         new_config["match_threshold"] = round(self._strictness_slider.value() / 100.0, 2)
 
         try:
@@ -730,14 +734,15 @@ class SettingsDialog(QDialog):
         """
         if not self._confirm(
             "Restore Default Options?",
-            "This will turn notifications ON, reset recognition strictness to "
-            "0.75, and turn OFF launch on login.\n\n"
+            "This will turn notifications ON, turn auto-pause media ON, reset "
+            "recognition strictness to 0.75, and turn OFF launch on login.\n\n"
             "This cannot be undone. Continue?",
         ):
             return
 
         def mutate(data):
             data["notifications"] = True
+            data["auto_pause_media"] = True
             data["match_threshold"] = 0.75
 
         # Launch-on-login default is OFF. It's external systemd state, so apply
@@ -753,9 +758,9 @@ class SettingsDialog(QDialog):
         QMessageBox.information(
             self,
             "Defaults restored",
-            "Options restored to defaults (notifications on, strictness 0.75, "
-            "launch on login off). The settings window will close; reopen it to "
-            "see the changes.",
+            "Options restored to defaults (notifications on, auto-pause media "
+            "on, strictness 0.75, launch on login off). The settings window "
+            "will close; reopen it to see the changes.",
         )
         self.accept()
 

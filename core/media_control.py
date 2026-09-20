@@ -29,6 +29,38 @@ _LIST_ARGS = [
     "--format", "{{playerName}}\t{{status}}",
 ]
 
+# Full-row variant: adds url + title so ONE query can answer both the Celery
+# Man wake gate ("is the video playing?") and auto-pause ("who is Playing?").
+_SNAPSHOT_ARGS = [
+    "playerctl", "-a", "metadata",
+    "--format", "{{playerName}}\t{{status}}\t{{xesam:url}}\t{{xesam:title}}",
+]
+
+
+def metadata_snapshot(gui_env: dict) -> list[tuple[str, str, str, str]] | None:
+    """(name, status, url, title) for every MPRIS player.
+
+    Distinguishes two degrades the callers treat differently:
+      []   -- playerctl answered "no players" (non-zero exit). A real,
+              empty answer: the gate passes, auto-pause pauses nothing.
+      None -- the probe itself failed (playerctl missing, timeout). The
+              wake gate fails OPEN and auto-pause falls back to its own
+              list_playing_players query.
+    """
+    try:
+        result = run_capture(_SNAPSHOT_ARGS, env=gui_env, timeout=2)
+    except Exception as e:
+        print(f"[media_control] metadata snapshot failed ({e})")
+        return None
+    if result.returncode != 0:  # typically "No players found"
+        return []
+    rows: list[tuple[str, str, str, str]] = []
+    for line in result.stdout.splitlines():
+        name, status, url, title = (line.split("\t", 3) + ["", "", "", ""])[:4]
+        if name.strip():
+            rows.append((name.strip(), status.strip(), url, title))
+    return rows
+
 
 def list_playing_players(gui_env: dict) -> list[str]:
     """Names of every MPRIS player currently reporting status 'Playing'.

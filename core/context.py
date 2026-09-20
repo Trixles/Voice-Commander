@@ -38,6 +38,11 @@ class Context:
         #     so a command that managed media isn't fought on the way out.
         self.auto_paused_players: list[str] = []
         self.media_touched: bool = False
+        #   pending_media_snapshot -- (name, status, url, title) rows the
+        #     Celery Man wake gate already fetched while deciding whether to
+        #     wake; _auto_pause_on_wake consumes-and-clears it so a wake
+        #     costs one playerctl query total, not two.
+        self.pending_media_snapshot: list[tuple] | None = None
 
     def update(self, **kwargs):
         for k, v in kwargs.items():

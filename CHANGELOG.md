@@ -5,6 +5,19 @@ All notable changes to Voice Commander will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] &mdash; 2026-09-20
+
+### Fixed
+- **Watching Celery Man no longer trips a spurious wake.** The clip says
+  "computer" a second time beyond its launch phrase ("Computer, do we
+  have any new sequences&hellip;"), which opened a phantom command window
+  and &mdash; with auto-pause on &mdash; paused the video mid-line. A wake
+  carried only by a baked-in wake word is now suppressed while the video
+  is actually playing: checked against MPRIS reality (never a timer),
+  failing open if the probe breaks, and never gating custom wake words.
+  The gate's playerctl snapshot is reused by auto-pause, so a wake still
+  costs exactly one query.
+
 ## [2.0.0] &mdash; 2026-09-20
 
 The whisper rebuild. 2.0.0 replaces the entire speech stack: recognition

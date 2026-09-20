@@ -151,3 +151,67 @@ def test_resume_honors_in_flight_pause_even_if_toggle_now_off(monkeypatch):
     ctx.auto_paused_players = ["spotify"]
     listener._auto_resume_after_wake(ctx, {})
     assert resumed == [["spotify"]]
+
+
+# -- media_control.metadata_snapshot ------------------------------------------
+#
+# One playerctl query powering BOTH the Celery Man wake gate and auto-pause:
+# full (name, status, url, title) rows. [] means "no players" (a valid
+# answer); None means "the probe itself failed" (gate fails open, auto-pause
+# falls back to its own query).
+
+
+def test_metadata_snapshot_parses_rows(monkeypatch):
+    out = ("firefox\tPlaying\thttps://www.youtube.com/watch?v=maAFcEU6atk\tCelery Man\n"
+           "spotify\tPaused\t\tSome Song\n")
+    monkeypatch.setattr(media_control, "run_capture", lambda *a, **kw: _result(out))
+    assert media_control.metadata_snapshot({}) == [
+        ("firefox", "Playing", "https://www.youtube.com/watch?v=maAFcEU6atk", "Celery Man"),
+        ("spotify", "Paused", "", "Some Song"),
+    ]
+
+
+def test_metadata_snapshot_empty_on_no_players(monkeypatch):
+    monkeypatch.setattr(media_control, "run_capture",
+                        lambda *a, **kw: _result("No players found", 1))
+    assert media_control.metadata_snapshot({}) == []
+
+
+def test_metadata_snapshot_none_when_probe_fails(monkeypatch):
+    def _boom(*a, **kw):
+        raise OSError("playerctl not found")
+    monkeypatch.setattr(media_control, "run_capture", _boom)
+    assert media_control.metadata_snapshot({}) is None
+
+
+# -- _auto_pause_on_wake: consumes the wake gate's snapshot -------------------
+#
+# The gate already paid for a playerctl query deciding whether to wake at
+# all; auto-pause must reuse that snapshot instead of shelling out again
+# (net-zero subprocesses per wake), and must CLEAR the stash so a stale
+# snapshot can never leak into a later window.
+
+
+def test_pause_consumes_stashed_snapshot_without_requerying(monkeypatch):
+    monkeypatch.setattr(commands, "get_auto_pause_media", lambda: True)
+    queried = []
+    monkeypatch.setattr(media_control, "list_playing_players",
+                        lambda env: queried.append(1) or [])
+    paused = []
+    monkeypatch.setattr(media_control, "pause_players",
+                        lambda names, env: paused.append(list(names)))
+    ctx = Context()
+    ctx.pending_media_snapshot = [("spotify", "Playing", "", "Song"),
+                                  ("vlc", "Paused", "", "Movie")]
+    listener._auto_pause_on_wake(ctx, {})
+    assert paused == [["spotify"]]          # only Playing rows pause
+    assert queried == []                    # snapshot reused, no second query
+    assert ctx.pending_media_snapshot is None  # stash cleared
+
+
+def test_stale_stash_cleared_even_when_auto_pause_disabled(monkeypatch):
+    monkeypatch.setattr(commands, "get_auto_pause_media", lambda: False)
+    ctx = Context()
+    ctx.pending_media_snapshot = [("spotify", "Playing", "", "Song")]
+    listener._auto_pause_on_wake(ctx, {})
+    assert ctx.pending_media_snapshot is None

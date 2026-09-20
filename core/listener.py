@@ -36,7 +36,8 @@ from core.log_buffer import log
 from core.notify import notify as _notify
 from core.recognizer import SAMPLE_RATE
 from core.run import get_default_source
-from core.wake import WakeWordDetector
+from core.wake import BAKED_IN_WAKE_WORDS, WakeWordDetector
+from core.actions import apps
 import core.commands as commands
 import core.media_control as media_control
 import core.overrides as overrides
@@ -53,10 +54,20 @@ def _auto_pause_on_wake(context: Context, gui_env: dict) -> None:
     """Entering the wake window from SLEEPING: pause whatever is playing and
     remember it. Opens a fresh media-touched window (reset the flag) so a
     command in THIS window can veto the resume."""
+    # Consume the wake gate's snapshot FIRST (clear even when the toggle is
+    # off, so a stale snapshot can never leak into a later window). A wake
+    # that went through the gate already paid for the playerctl query; reuse
+    # it rather than shelling out a second time.
+    snapshot = context.pending_media_snapshot
+    context.update(pending_media_snapshot=None)
     if not commands.get_auto_pause_media():
         return
     context.update(media_touched=False)
-    playing = media_control.list_playing_players(gui_env)
+    if snapshot is not None:
+        playing = [name for (name, status, _url, _title) in snapshot
+                   if status == "Playing"]
+    else:
+        playing = media_control.list_playing_players(gui_env)
     if playing:
         media_control.pause_players(playing, gui_env)
         context.update(auto_paused_players=list(playing))
@@ -93,6 +104,37 @@ def _auto_resume_after_wake(context: Context, gui_env: dict) -> None:
         return
     media_control.resume_players(paused, gui_env)
     print(f"[listener] Auto-resumed media: {paused}")
+
+
+def _wake_is_celery_echo(text: str, detector: WakeWordDetector,
+                         context: Context, gui_env: dict) -> bool:
+    """True -> this wake is the Celery Man video saying "computer"; stay
+    asleep. The clip's audio uses the baked-in wake word beyond its launch
+    phrase, so without a gate every viewing fires a spurious wake window
+    (and auto-pause interrupts the video mid-line).
+
+    Same philosophy as the command echo guard in core/actions/apps.py: ask
+    reality (is the video actually Playing right now?), never a timer, and
+    fail OPEN -- a broken probe must never make VC deaf. Gates ONLY wakes
+    carried exclusively by baked-in wake words; a custom word ("hey dude")
+    always wakes, without even paying for the probe. A Paused video makes
+    no sound, so that "computer" was the user -- wake normally.
+
+    Side channel: when the wake PROCEEDS and the probe ran, the snapshot is
+    stashed on context for _auto_pause_on_wake to consume -- one playerctl
+    query per wake, shared, not two. The stash is cleared on every other
+    path so nothing stale survives."""
+    context.update(pending_media_snapshot=None)
+    if any(w not in BAKED_IN_WAKE_WORDS for w in detector.matched(text)):
+        return False
+    rows = media_control.metadata_snapshot(gui_env)
+    if rows is None:  # probe failed -> fail open
+        return False
+    if any(apps._row_is_celery_echo(name, status, url, title)
+           for (name, status, url, title) in rows):
+        return True
+    context.update(pending_media_snapshot=rows)
+    return False
 
 
 def _notify_general(*args, **kwargs) -> None:
@@ -450,6 +492,10 @@ def run_listener(
             partial = event.text
             if context.state == State.SLEEPING:
                 if partial and detector.check(partial):
+                    if _wake_is_celery_echo(partial, detector, context, gui_env):
+                        print("[listener] Wake suppressed (Celery Man audio).")
+                        log("Wake suppressed (Celery Man playing)")
+                        continue
                     command_window = commands.get_command_window()
                     matched_since_wake = False
                     print("[listener] Wake word detected (partial).")
@@ -490,6 +536,11 @@ def run_listener(
 
         if context.state == State.SLEEPING:
             if not detector.check(text):
+                continue
+
+            if _wake_is_celery_echo(text, detector, context, gui_env):
+                print("[listener] Wake suppressed (Celery Man audio).")
+                log("Wake suppressed (Celery Man playing)")
                 continue
 
             print("[listener] Wake word detected.")

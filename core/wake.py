@@ -71,6 +71,17 @@ class WakeWordDetector:
         t = text.lower()
         return any(p.search(t) for p in self._patterns)
 
+    def matched(self, text: str) -> list[str]:
+        """The wake words that occur (whole-word) in `text`, in detector
+        order. Lets the Celery Man wake gate ask WHICH word woke us: a wake
+        carried only by the baked-in word is gateable; one carried by any
+        custom word never is. Pairs words to patterns the same way __init__
+        compiled them (blank entries skipped), so a blank can't shift the
+        answers."""
+        t = text.lower()
+        words = [w for w in self.wake_words if w]
+        return [w for w, p in zip(words, self._patterns) if p.search(t)]
+
     def is_wake_only(self, text: str) -> bool:
         """True iff `text` contains a wake word and nothing else of substance.
 

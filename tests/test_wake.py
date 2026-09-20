@@ -123,3 +123,31 @@ def test_multiword_wake_phrase_is_wake_only():
     d = WakeWordDetector(["hey computer"])
     assert d.is_wake_only("hey computer") is True
 
+
+
+# -- matched: WHICH wake words hit --------------------------------------------
+#
+# The Celery Man wake gate needs to know whether a wake was triggered ONLY by
+# the baked-in "computer" (the word the video says) or also by a custom wake
+# word (which must keep waking VC while the video plays). matched() reports
+# the hit words; check() stays the cheap boolean.
+
+
+def test_matched_lists_hit_wake_words_in_detector_order():
+    d = WakeWordDetector(["computer", "hey dude"])
+    assert d.matched("computer open reddit") == ["computer"]
+    assert d.matched("hey dude ask the computer") == ["computer", "hey dude"]
+    assert d.matched("nothing to see here") == []
+
+
+def test_matched_is_whole_word_like_check():
+    d = WakeWordDetector(["computer"])
+    assert d.matched("computerized age") == []
+
+
+def test_matched_skips_blank_entries_without_misalignment():
+    """Blank wake words are skipped at pattern-compile time; matched() must
+    pair words to patterns the same way or a blank entry shifts every
+    answer by one."""
+    d = WakeWordDetector(["", "computer"])
+    assert d.matched("computer") == ["computer"]

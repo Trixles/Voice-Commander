@@ -38,7 +38,8 @@ class ScriptedRecognizer:
 
 def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
                 rec_cls=ScriptedRecognizer,
-                playing_players=(), auto_pause=True):
+                playing_players=(), auto_pause=True,
+                media_rows=None, wake_words=("computer",)):
     """Drive run_listener over `events` and return the harness artifacts.
 
     playing_players / auto_pause feed the auto-pause-on-wake hook: the hook
@@ -100,8 +101,24 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
     paused = []
     resumed = []
     monkeypatch.setattr(commands, "get_auto_pause_media", lambda: auto_pause)
+    list_playing_calls = []
+    def _list_playing(env):
+        list_playing_calls.append(1)
+        return list(playing_players)
     monkeypatch.setattr(listener.media_control, "list_playing_players",
-                        lambda env: list(playing_players))
+                        _list_playing)
+    # Celery wake gate probe. In production ONE playerctl answers both the
+    # gate and auto-pause, so the harness mirrors that: `media_rows` defaults
+    # to rows derived from `playing_players`, and a test passes media_rows
+    # explicitly only to stage celery-specific url/title/status data.
+    if media_rows is None:
+        media_rows = [(name, "Playing", "", "") for name in playing_players]
+    snapshot_calls = []
+    def _snapshot(env):
+        snapshot_calls.append(1)
+        return list(media_rows)
+    monkeypatch.setattr(listener.media_control, "metadata_snapshot",
+                        _snapshot, raising=False)
     monkeypatch.setattr(listener.media_control, "pause_players",
                         lambda names, env: paused.append(list(names)))
     monkeypatch.setattr(listener.media_control, "resume_players",
@@ -126,7 +143,7 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
     listener.run_listener(
         source="fake-source",
         recognizer_factory=factory,
-        detector=WakeWordDetector(["computer"]),
+        detector=WakeWordDetector(list(wake_words)),
         context=context,
         gui_env={},
         state_queue=state_queue,
@@ -145,6 +162,8 @@ def run_machine(events, monkeypatch, try_match=None, state=State.SLEEPING,
         "notification_sources": notification_sources,
         "paused": paused,
         "resumed": resumed,
+        "snapshot_calls": snapshot_calls,
+        "list_playing_calls": list_playing_calls,
     }
 
 
@@ -499,3 +518,64 @@ def test_text_wake_miss_still_nags(monkeypatch):
         try_match=lambda t: False,
     )
     assert any("No match" in n[0] for n in r["notifications"])
+
+
+# -- Celery Man wake gate ------------------------------------------------------
+#
+# The clip's audio says "computer" beyond its launch phrase (Paul's later
+# "Computer, do we have any new sequences..."), which trips a spurious wake:
+# window opens, auto-pause interrupts the video. The gate suppresses a wake
+# whose ONLY trigger is a baked-in wake word while the celery video is
+# actually Playing -- reality-checked via the same metadata snapshot
+# auto-pause consumes, never a timer. Custom wake words are never gated.
+
+_CELERY_ROW = ("firefox", "Playing",
+               "https://www.youtube.com/watch?v=maAFcEU6atk", "Celery Man")
+
+
+def test_final_wake_suppressed_while_celery_playing(monkeypatch):
+    r = run_machine(
+        [RecognizerEvent("final", "computer do we have any new sequences")],
+        monkeypatch, media_rows=[_CELERY_ROW])
+    assert r["context"].state == State.SLEEPING
+    assert r["matched"] == []              # never reached the matcher
+    assert State.LISTENING not in r["states"]  # no transition, no tray flicker
+    assert all("Listening..." not in n for n in r["notifications"])
+
+
+def test_partial_wake_suppressed_while_celery_playing(monkeypatch):
+    r = run_machine([RecognizerEvent("partial", "computer")],
+                    monkeypatch, media_rows=[_CELERY_ROW])
+    assert r["context"].state == State.SLEEPING
+    assert State.LISTENING not in r["states"]
+
+
+def test_custom_wake_word_wakes_during_celery_without_probe(monkeypatch):
+    """'hey dude' must keep working mid-video -- and the gate must not even
+    pay for the playerctl probe when a custom word matched."""
+    r = run_machine([RecognizerEvent("partial", "hey dude")],
+                    monkeypatch, media_rows=[_CELERY_ROW],
+                    wake_words=("computer", "hey dude"))
+    assert r["context"].state == State.LISTENING
+    assert r["snapshot_calls"] == []
+
+
+def test_paused_celery_video_does_not_gate_the_wake(monkeypatch):
+    """Paused video makes no sound: that 'computer' was the user."""
+    row = ("firefox", "Paused",
+           "https://www.youtube.com/watch?v=maAFcEU6atk", "Celery Man")
+    r = run_machine([RecognizerEvent("partial", "computer")],
+                    monkeypatch, media_rows=[row])
+    assert r["context"].state == State.LISTENING
+
+
+def test_auto_pause_reuses_gate_snapshot_net_zero_queries(monkeypatch):
+    """A normal (non-celery) wake: the gate's snapshot feeds auto-pause, so
+    list_playing_players is never called on the way in."""
+    r = run_machine(
+        [RecognizerEvent("final", "computer open reddit")],
+        monkeypatch, try_match=lambda t: False,
+        media_rows=[("spotify", "Playing", "", "Some Song")])
+    assert r["paused"] == [["spotify"]]
+    assert r["list_playing_calls"] == []
+    assert r["snapshot_calls"] == [1]

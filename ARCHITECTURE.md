@@ -983,8 +983,29 @@ companion — keep them in sync.
   in the format string precisely to test that membership.
   The check FAILS OPEN (playerctl missing/erroring/no players → fire
   normally) and runs only when celery_man matches, so it costs other
-  commands nothing. NO wake words are muted; every command stays usable
-  while the video plays, and the guard ends the instant the video does.
+  commands nothing. Every command stays usable while the video plays, and
+  the guard ends the instant the video does.
+- **The wake gate (2026-09-20):** the clip says "computer" beyond its launch
+  phrase (Paul's later "Computer, do we have any new sequences…"), which the
+  command guard can't catch — nothing matches, the wake itself is the
+  damage (spurious window + auto-pause interrupting the video).
+  `core/listener.py::_wake_is_celery_echo` gates BOTH SLEEPING wake sites
+  (partial and final): a wake carried ONLY by baked-in wake words
+  (`core.wake.BAKED_IN_WAKE_WORDS`) is suppressed iff a
+  `media_control.metadata_snapshot` row is the celery video with status
+  `Playing` (shared matcher: `apps._row_is_celery_echo`; strictly Playing —
+  the command guard's paused-by-us nuance doesn't apply, nothing is paused
+  yet while SLEEPING). Custom wake words are NEVER gated and skip the probe
+  entirely. Fails OPEN (probe error → wake normally); a suppressed wake
+  logs "Wake suppressed (Celery Man playing)" but shows no toast. This
+  selectively revives what 1.0.0's wake-mute wanted, minus its sins: no
+  timer, reality-checked, per-word (Tyler's ruling, 2026-09-20).
+  Cost discipline: the gate's snapshot is stashed on
+  `context.pending_media_snapshot` when the wake proceeds;
+  `_auto_pause_on_wake` consumes-and-clears it instead of re-querying — one
+  playerctl subprocess per wake, total. The stash is cleared on every gate
+  entry and every auto-pause entry (even toggle-off), so nothing stale
+  survives into a later window.
   A blocked echo is FULLY SILENT: the action returns `False`, and
   `_dispatch` treats an action returning `False` as "declined" — no
   notification, no cooldown stamp, no `>>` log line (a ghost "Loading up
@@ -1003,7 +1024,10 @@ companion — keep them in sync.
   append params; match the video ID). Fail CLOSED on playerctl errors (a
   broken check must never block the command). Treat `Paused` as playing
   UNCONDITIONALLY (only a player in `auto_paused_players` counts — a video the
-  USER paused is a genuine repeat, and must still fire).
+  USER paused is a genuine repeat, and must still fire). Extend the wake
+  gate to custom wake words (the video only ever says "computer"; a custom
+  word waking mid-video is the user). Reintroduce time-based wake muting —
+  the gate exists precisely because the reality-check made that unnecessary.
 
 ### Auto-pause media on wake: hook `set_state`, resume by name, honor media_touched
 - **What:** When a wake opens the transient wake window, VC pauses whatever is
@@ -1012,8 +1036,11 @@ companion — keep them in sync.
   from SLEEPING (`SLEEPING → {LISTENING, CONFIRMING}` per `_WAKE_WINDOW_STATES`)
   calls `_auto_pause_on_wake`; leaving it (`{LISTENING, CONFIRMING} → not-window`)
   calls `_auto_resume_after_wake`. Pausing snapshots the names of players
-  reporting `Playing` (`core/media_control.py::list_playing_players`, one
-  `playerctl -a` call), pauses each with `playerctl -p <name> pause`, and
+  reporting `Playing` — since 2026-09-20, preferentially from the Celery
+  wake gate's stashed `context.pending_media_snapshot` (consumed-and-cleared
+  on every entry, even with the toggle off; see the Celery invariant), falling
+  back to `core/media_control.py::list_playing_players` (one
+  `playerctl -a` call) — pauses each with `playerctl -p <name> pause`, and
   records the names in `context.auto_paused_players`; resume replays exactly
   those names with `playerctl -p <name> play`. A player VC didn't pause is
   never touched. PAUSE, not duck. Config: `auto_pause_media` bool, default ON,

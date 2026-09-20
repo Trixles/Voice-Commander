@@ -63,6 +63,22 @@ CELERY_MAN_URL = "https://www.youtube.com/watch?v=maAFcEU6atk"
 _CELERY_MAN_VIDEO_ID = CELERY_MAN_URL.split("v=")[-1]
 
 
+def _row_is_celery_echo(name: str, status: str, url: str, title: str,
+                        paused_by_us: frozenset | set = frozenset()) -> bool:
+    """One MPRIS metadata row: is this the Celery Man video making noise?
+
+    Pure logic shared by the command echo guard below and the listener's
+    wake gate (core/listener.py) -- both consume the same
+    name/status/url/title row shape, so the video-matching rules live once.
+    Playing counts; Paused counts only if WE paused it this wake window
+    (see _celery_man_is_playing's docstring for why)."""
+    is_celery = _CELERY_MAN_VIDEO_ID in url or "celery man" in title.lower()
+    if not is_celery:
+        return False
+    s = status.strip()
+    return s == "Playing" or (s == "Paused" and name.strip() in paused_by_us)
+
+
 def _celery_man_is_playing(gui_env: dict, context=None) -> bool:
     """
     Return True if the Celery Man video is currently PLAYING in any MPRIS
@@ -95,13 +111,7 @@ def _celery_man_is_playing(gui_env: dict, context=None) -> bool:
     paused_by_us = set(getattr(context, "auto_paused_players", None) or [])
     for line in result.stdout.splitlines():
         name, status, url, title = (line.split("\t", 3) + ["", "", "", ""])[:4]
-        is_celery = _CELERY_MAN_VIDEO_ID in url or "celery man" in title.lower()
-        if not is_celery:
-            continue
-        if status.strip() == "Playing":
-            return True
-        # We paused it a moment ago on wake -> still an echo, block the relaunch.
-        if status.strip() == "Paused" and name.strip() in paused_by_us:
+        if _row_is_celery_echo(name, status, url, title, paused_by_us):
             return True
     return False
 
@@ -114,8 +124,10 @@ def celery_man(gui_env: dict, context=None):
     is already playing (per _celery_man_is_playing), the command that matched
     is the video echoing, so decline by returning False -- the dispatcher then
     suppresses the notification and log line too, so an echo is fully silent.
-    No wake words are muted; every other command stays fully usable while the
-    video plays, and the guard ends the instant the video does.
+    Every other command stays fully usable while the video plays, and the
+    guard ends the instant the video does. (The clip also says "computer"
+    beyond its launch phrase; the WAKE side of that echo is gated in
+    core/listener.py::_wake_is_celery_echo -- see the ARCHITECTURE invariant.)
 
     A genuine fire marks the wake window media_touched so auto-pause won't
     resume the pre-wake music on top of the video -- and it must be set HERE,

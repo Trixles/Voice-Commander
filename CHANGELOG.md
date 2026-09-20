@@ -5,7 +5,47 @@ All notable changes to Voice Commander will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] &mdash; 2026-09-20
+
+The whisper rebuild. 2.0.0 replaces the entire speech stack: recognition
+moved from Vosk streaming to whisper.cpp, and waking moved to a text match
+on the live transcript. The Vosk-era build (v0.2.0&ndash;v1.0.1) is archived
+read-only as
+[Voice-Commander-Vosk](https://github.com/Trixles/Voice-Commander-Vosk).
+
+### Changed
+- **Speech recognition runs on whisper.cpp.** Audio is segmented by Silero
+  VAD (a 400 ms pause closes an utterance) and each segment is transcribed
+  by a local `whisper-server`, shipped as a second systemd user unit bound
+  to the app so it can never outlive it. New config keys: `whisper_model`
+  (default `base.en`), `whisper_server_port`, `whisper_vad_tail_ms`.
+  Requires the system `whisper-cpp` package.
+- **Waking is a text match.** Wake words are matched whole-word against the
+  live transcript and acknowledged on partials. "computer" is baked in
+  structurally &mdash; always active, never stored in config &mdash; and
+  `wake_words` now holds only your custom additions (fresh installs seed
+  "hey dude").
+- **The Model tab picks a Whisper model.** Browse to any ggml `.bin`
+  (with a link to the Hugging Face model files), replacing the Vosk model
+  machinery.
+- **Shipped default overrides emptied.** The old rewrite rules corrected
+  Vosk's specific mishearing profile; whisper starts from a clean slate and
+  rules return only if real use earns them. The Overrides tab drops its
+  System Overrides section accordingly.
+- **Power commands exit through `org.kde.Shutdown`** &mdash; the same D-Bus
+  path as KDE's own power controls, so shutdown, restart, and logout get a
+  proper session-managed exit.
+
+### Added
+- **Auto-pause media on wake.** Whatever is playing pauses the moment a
+  wake word lands and resumes when the command window closes
+  (`auto_pause_media`, default on; it only resumes what it paused).
+- **Open-folder commands.** The open-file action now accepts a directory,
+  not just a file.
+
+### Fixed
+- The Save button correctly re-disables when edits are reverted back to
+  the saved state.
 
 ### Removed
 - **The Vosk speech backend.** whisper.cpp (via `whisper-server`) is now the

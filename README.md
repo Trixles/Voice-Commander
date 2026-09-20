@@ -4,7 +4,7 @@ Hands-free voice control for KDE Plasma 6 on Wayland — and every word of it
 stays on your machine.
 
 Say a wake word, speak a command: launch apps, open sites, throw windows onto
-the monitor you name, ride volume and media, or run anything else you've
+the monitor you name, control volume and media, or run anything else you've
 taught it. Speech recognition happens locally through
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp). No cloud, no accounts,
 no API keys, no network dependency once installed.

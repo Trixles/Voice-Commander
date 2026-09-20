@@ -9,7 +9,9 @@ taught it. Speech recognition happens locally through
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp). No cloud, no accounts,
 no API keys, no network dependency once installed.
 
-![Voice Commander settings window](assets/screenshot.png)
+<p align="center">
+  <img src="assets/screenshot.png" alt="Voice Commander settings window">
+</p>
 
 ## Highlights
 

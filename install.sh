@@ -175,35 +175,69 @@ check_prereqs() {
     if [[ ${#missing_bins[@]} -gt 0 ]]; then
         err "Missing required dependencies: ${missing_bins[*]}"
         echo
-        case "$distro" in
-            arch)
-                if [[ ${#arch_pacman_pkgs[@]} -gt 0 ]]; then
-                    printf "To install official packages on Arch/CachyOS/Manjaro, run:\n"
-                    printf "    ${c_bold}sudo pacman -S %s${c_reset}\n\n" "${arch_pacman_pkgs[*]}"
-                fi
-                if [[ ${#arch_aur_pkgs[@]} -gt 0 ]]; then
-                    if command -v yay >/dev/null 2>&1; then
-                        printf "To install AUR packages, run:\n"
-                        printf "    ${c_bold}yay -S %s${c_reset}\n\n" "${arch_aur_pkgs[*]}"
-                    else
-                        printf "${c_bold}Note:${c_reset} The following package(s) are from the AUR (yay not detected):\n"
-                        printf "    %s\n" "${arch_aur_pkgs[*]}"
-                        printf "Please install them manually using your preferred AUR helper (e.g., yay, paru).\n\n"
+
+        printf "Would you like to install the missing packages automatically? [Y/n]: "
+        read -r do_install
+        if [[ -z "$do_install" || "$do_install" =~ ^[Yy]$ ]]; then
+            case "$distro" in
+                arch)
+                    if [[ ${#arch_pacman_pkgs[@]} -gt 0 ]]; then
+                        info "Installing official packages via pacman..."
+                        sudo pacman -S --needed "${arch_pacman_pkgs[@]}"
                     fi
-                fi
-                ;;
-            debian)
-                printf "To install on Debian/Ubuntu/Kubuntu, run:\n"
-                printf "    ${c_bold}sudo apt install %s${c_reset}\n" "${missing_pkgs[*]}"
-                ;;
-            *)
-                printf "Your distro was not auto-detected. Install these binaries via\n"
-                printf "your package manager, then re-run this script:\n"
-                printf "    ${c_bold}%s${c_reset}\n" "${missing_bins[*]}"
-                ;;
-        esac
-        echo
-        die "Re-run ./install.sh after installing."
+                    if [[ ${#arch_aur_pkgs[@]} -gt 0 ]]; then
+                        if command -v yay >/dev/null 2>&1; then
+                            info "Installing AUR packages via yay..."
+                            yay -S "${arch_aur_pkgs[@]}"
+                        else
+                            warn "yay not found. Please install AUR package(s) manually: ${arch_aur_pkgs[*]}"
+                        fi
+                    fi
+                    ;;
+                debian)
+                    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+                        info "Installing packages via apt..."
+                        sudo apt update && sudo apt install -y "${missing_pkgs[@]}"
+                    fi
+                    ;;
+                *)
+                    err "Automatic installation is not supported for your distro."
+                    ;;
+            esac
+
+            # Re-verify dependencies after attempting installation
+            check_prereqs_retry
+        else
+            case "$distro" in
+                arch)
+                    if [[ ${#arch_pacman_pkgs[@]} -gt 0 ]]; then
+                        printf "To install official packages on Arch/CachyOS/Manjaro, run:\n"
+                        printf "    ${c_bold}sudo pacman -S %s${c_reset}\n\n" "${arch_pacman_pkgs[*]}"
+                    fi
+                    if [[ ${#arch_aur_pkgs[@]} -gt 0 ]]; then
+                        if command -v yay >/dev/null 2>&1; then
+                            printf "To install AUR packages, run:\n"
+                            printf "    ${c_bold}yay -S %s${c_reset}\n\n" "${arch_aur_pkgs[*]}"
+                        else
+                            printf "${c_bold}Note:${c_reset} The following package(s) are from the AUR (yay not detected):\n"
+                            printf "    %s\n" "${arch_aur_pkgs[*]}"
+                            printf "Please install them manually using your preferred AUR helper (e.g., yay, paru).\n\n"
+                        fi
+                    fi
+                    ;;
+                debian)
+                    printf "To install on Debian/Ubuntu/Kubuntu, run:\n"
+                    printf "    ${c_bold}sudo apt install %s${c_reset}\n" "${missing_pkgs[*]}"
+                    ;;
+                *)
+                    printf "Your distro was not auto-detected. Install these binaries via\n"
+                    printf "your package manager, then re-run this script:\n"
+                    printf "    ${c_bold}%s${c_reset}\n" "${missing_bins[*]}"
+                    ;;
+            esac
+            echo
+            die "Re-run ./install.sh after installing."
+        fi
     fi
 
     # KDE Plasma 6 version sanity check.
@@ -219,6 +253,20 @@ check_prereqs() {
     else
         info "ReSpeaker xvf_host not found -- LED control disabled (this is normal)."
     fi
+}
+
+# Secondary retry check to validate after auto-installation
+check_prereqs_retry() {
+    local missing_bins=()
+    for bin in "${!REQUIRED_BINS[@]}"; do
+        if ! command -v "$bin" >/dev/null 2>&1; then
+            missing_bins+=("$bin")
+        fi
+    done
+    if [[ ${#missing_bins[@]} -gt 0 ]]; then
+        die "Some dependencies are still missing after installation: ${missing_bins[*]}"
+    fi
+    ok "All required dependencies successfully verified."
 }
 
 # -- ReSpeaker udev rule check ----------------------------------------------
@@ -380,7 +428,7 @@ path = '${config}'
 try:
     with open(path, 'r') as f:
         data = json.load(f)
-    data['recognizer_backend'] = 'whisper_remote' # adjust keys according to your codebase if necessary
+    data['recognizer_backend'] = 'whisper_remote'
     data['whisper_host'] = os.environ.get('REMOTE_WHISPER_HOST')
     data['whisper_port'] = int(os.environ.get('REMOTE_WHISPER_PORT', 8080))
     with open(path, 'w') as f:
@@ -437,7 +485,6 @@ install_service() {
     # whisper-server companion unit: only created/used if NOT using a remote whisper server
     local server_unit="${SYSTEMD_USER_DIR}/${APP_NAME}-server.service"
     if [[ "$USE_REMOTE_WHISPER" == "true" ]]; then
-        # Remove local server unit if it exists from previous installations
         rm -f "${server_unit}"
         ok "Skipped local whisper-server companion unit (using remote server)."
     else

@@ -51,6 +51,11 @@ readonly SILERO_VAD_URL="https://github.com/dscripka/openWakeWord/releases/downl
 VC_VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "${REPO_DIR}/core/__init__.py")
 readonly VC_VERSION
 
+# Global variables for remote whisper configuration
+USE_REMOTE_WHISPER="false"
+REMOTE_WHISPER_HOST=""
+REMOTE_WHISPER_PORT=""
+
 # -- Output helpers ----------------------------------------------------------
 c_reset='\033[0m'
 c_bold='\033[1m'
@@ -80,6 +85,30 @@ detect_distro() {
     esac
 }
 
+# -- Remote Whisper Configuration Prompt ------------------------------------
+prompt_whisper_backend() {
+    info "Whisper Backend Configuration"
+    printf "Do you want to use a remote Whisper server (IP:Port) instead of local? [y/N]: "
+    read -r use_remote
+
+    if [[ "$use_remote" =~ ^[Yy]$ ]]; then
+        printf "Enter remote Whisper IP/Host [default: 127.0.0.1]: "
+        read -r REMOTE_WHISPER_HOST
+        REMOTE_WHISPER_HOST="${REMOTE_WHISPER_HOST:-127.0.0.1}"
+
+        printf "Enter remote Whisper Port [default: 8080]: "
+        read -r REMOTE_WHISPER_PORT
+        REMOTE_WHISPER_PORT="${REMOTE_WHISPER_PORT:-8080}"
+
+        USE_REMOTE_WHISPER="true"
+        ok "Configured to use remote Whisper server at ${REMOTE_WHISPER_HOST}:${REMOTE_WHISPER_PORT}"
+    else
+        USE_REMOTE_WHISPER="false"
+        ok "Configured to use local Whisper backend."
+    fi
+    echo
+}
+
 # -- Required binaries -------------------------------------------------------
 # Format: binary_name=arch_pkg|debian_pkg
 # A '-' on either side means "not packaged separately on this distro".
@@ -104,6 +133,11 @@ declare -A ARCH_AUR_PKGS=(
 )
 
 check_prereqs() {
+    # If using a remote whisper server, whisper-cli is not required locally
+    if [[ "$USE_REMOTE_WHISPER" == "true" ]]; then
+        unset REQUIRED_BINS[whisper-cli]
+    fi
+
     info "Checking prerequisites..."
     local distro
     distro=$(detect_distro)
@@ -297,14 +331,18 @@ install_kwin_script() {
 install_whisper_models() {
     mkdir -p "${MODELS_DIR}/whisper"
 
-    local ggml="${MODELS_DIR}/whisper/ggml-${WHISPER_MODEL_NAME}.bin"
-    if [[ -f "${ggml}" ]]; then
-        ok "Whisper model already present, skipping download."
+    if [[ "$USE_REMOTE_WHISPER" == "true" ]]; then
+        info "Using remote Whisper server -- skipping local model download."
     else
-        info "Downloading Whisper model ${WHISPER_MODEL_NAME} (~142 MB)..."
-        curl -fL --progress-bar -o "${ggml}" "${WHISPER_MODEL_URL}" \
-            || die "Failed to download Whisper model from ${WHISPER_MODEL_URL}"
-        ok "Whisper model installed."
+        local ggml="${MODELS_DIR}/whisper/ggml-${WHISPER_MODEL_NAME}.bin"
+        if [[ -f "${ggml}" ]]; then
+            ok "Whisper model already present, skipping download."
+        else
+            info "Downloading Whisper model ${WHISPER_MODEL_NAME} (~142 MB)..."
+            curl -fL --progress-bar -o "${ggml}" "${WHISPER_MODEL_URL}" \
+                || die "Failed to download Whisper model from ${WHISPER_MODEL_URL}"
+            ok "Whisper model installed."
+        fi
     fi
 
     local silero="${MODELS_DIR}/silero_vad.onnx"
@@ -318,9 +356,11 @@ install_whisper_models() {
     fi
 
     # whisper-server is a system binary (pacman: whisper-cpp), not something
-    # we install. Only the whisper backend needs it, so warn instead of die.
-    if ! command -v whisper-server >/dev/null 2>&1; then
-        warn "whisper-server not found on PATH. The whisper backend needs it: install the 'whisper-cpp' package."
+    # we install. Only the local whisper backend needs it, so warn instead of die.
+    if [[ "$USE_REMOTE_WHISPER" != "true" ]]; then
+        if ! command -v whisper-server >/dev/null 2>&1; then
+            warn "whisper-server not found on PATH. The local whisper backend needs it: install the 'whisper-cpp' package."
+        fi
     fi
 }
 
@@ -330,23 +370,53 @@ install_config() {
     local config="${CONFIG_DIR}/commands.json"
     if [[ -f "${config}" ]]; then
         ok "Existing commands.json preserved (not overwritten)."
+
+        # If using remote whisper, we can update or inject settings if needed
+        if [[ "$USE_REMOTE_WHISPER" == "true" ]]; then
+            info "Configuring existing commands.json to use remote whisper at ${REMOTE_WHISPER_HOST}:${REMOTE_WHISPER_PORT}..."
+            "${VENV_DIR}/bin/python" -c "
+import json, os
+path = '${config}'
+try:
+    with open(path, 'r') as f:
+        data = json.load(f)
+    data['recognizer_backend'] = 'whisper_remote' # adjust keys according to your codebase if necessary
+    data['whisper_host'] = os.environ.get('REMOTE_WHISPER_HOST')
+    data['whisper_port'] = int(os.environ.get('REMOTE_WHISPER_PORT', 8080))
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=4)
+except Exception as e:
+    print(f'Warning: Could not auto-update config: {e}')
+" 2>/dev/null || true
+        fi
     else
         info "Generating default commands.json..."
-        # Generate the default config by running core.commands as a module.
-        # This keeps the default command list defined in ONE place (Python),
-        # used by both the installer and the in-app 'Restore Defaults' button.
         (cd "${APP_DIR}" && "${VENV_DIR}/bin/python" -m core.commands --emit-defaults) > "${config}" 2>/dev/null
         if [[ $? -ne 0 || ! -s "${config}" ]]; then
             rm -f "${config}"
             die "Failed to generate default config."
         fi
+
+        # If remote whisper is enabled, patch the newly generated config file
+        if [[ "$USE_REMOTE_WHISPER" == "true" ]]; then
+            info "Injecting remote whisper settings into commands.json..."
+            "${VENV_DIR}/bin/python" -c "
+import json, os
+path = '${config}'
+with open(path, 'r') as f:
+    data = json.load(f)
+data['whisper_host'] = os.environ.get('REMOTE_WHISPER_HOST')
+data['whisper_port'] = int(os.environ.get('REMOTE_WHISPER_PORT', 8080))
+with open(path, 'w') as f:
+    json.dump(data, f, indent=4)
+" 2>/dev/null || true
+        fi
+
         ok "Default commands.json installed."
     fi
 }
 
 # -- README ------------------------------------------------------------------
-# Copy README.md to the data dir so the default 'open_readme' command has
-# something to open. Overwritten on every install so README changes propagate.
 install_readme() {
     info "Installing README to ${DATA_DIR}..."
     cp "${REPO_DIR}/README.md" "${DATA_DIR}/README.md"
@@ -364,15 +434,19 @@ install_service() {
         -e "s|@APP_DIR@|${APP_DIR}|g" \
         "${REPO_DIR}/voice-commander.service.in" > "${service_file}"
 
-    # whisper-server companion unit: BindsTo the app unit (never outlives
-    # it). Only actually started when recognizer_backend=whisper -- the app
-    # starts it on demand (core/whisper_server.py).
+    # whisper-server companion unit: only created/used if NOT using a remote whisper server
     local server_unit="${SYSTEMD_USER_DIR}/${APP_NAME}-server.service"
-    sed -e "s|@APP_NAME@|${APP_NAME}|g" \
-        "${REPO_DIR}/vc-whisper-server.service.in" > "${server_unit}"
+    if [[ "$USE_REMOTE_WHISPER" == "true" ]]; then
+        # Remove local server unit if it exists from previous installations
+        rm -f "${server_unit}"
+        ok "Skipped local whisper-server companion unit (using remote server)."
+    else
+        sed -e "s|@APP_NAME@|${APP_NAME}|g" \
+            "${REPO_DIR}/vc-whisper-server.service.in" > "${server_unit}"
+        ok "Service units installed at ${service_file} and ${server_unit}"
+    fi
 
     systemctl --user daemon-reload
-    ok "Service units installed at ${service_file} and ${server_unit}"
 }
 
 # -- Launcher ----------------------------------------------------------------
@@ -388,7 +462,6 @@ EOF
     chmod +x "${launcher}"
     ok "Launcher installed."
 
-    # Warn if ~/.local/bin is not on PATH.
     case ":${PATH}:" in
         *":${BIN_DIR}:"*) ;;
         *) warn "${BIN_DIR} is not on your PATH. Add it to your shell config to use the '${APP_NAME}' command directly." ;;
@@ -412,20 +485,14 @@ Terminal=false
 Categories=Utility;AudioVideo;
 StartupNotify=false
 EOF
-    # Refresh the menu cache so the entry appears without a re-login.
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "${apps_dir}" >/dev/null 2>&1 || true
     fi
     ok "App-menu entry installed."
 }
 
-# -- Start (autostart is opt-in; the installer does NOT enable) --------------
+# -- Start -------------------------------------------------------------------
 start_service() {
-    # 0.9.0: autostart is OPT-IN. The installer no longer enables the service at
-    # login -- that's the user's choice via Settings -> Options ("Launch on
-    # login") or `systemctl --user enable voice-commander.service`. We only
-    # start it now so it's usable immediately. On re-install over a running
-    # instance, restart to pick up new code.
     if systemctl --user is-active --quiet "${APP_NAME}.service"; then
         info "Service is already running -- restarting to pick up new code..."
         systemctl --user restart "${APP_NAME}.service"
@@ -444,6 +511,7 @@ main() {
     printf "Install: %s\n" "${DATA_DIR}"
     echo
 
+    prompt_whisper_backend
     check_prereqs
     check_python_version
     install_app
@@ -460,6 +528,11 @@ main() {
 
     echo
     printf "${c_green}${c_bold}Voice Commander (Whisper) ${VC_VERSION} is installed and running.${c_reset}\n"
+    if [[ "$USE_REMOTE_WHISPER" == "true" ]]; then
+        printf "Whisper Mode:   ${c_bold}Remote (${REMOTE_WHISPER_HOST}:${REMOTE_WHISPER_PORT})${c_reset}\n"
+    else
+        printf "Whisper Mode:   ${c_bold}Local${c_reset}\n"
+    fi
     echo
     printf "Check status:   ${c_bold}systemctl --user status %s${c_reset}\n" "${APP_NAME}"
     printf "View logs:      ${c_bold}journalctl --user -u %s -f${c_reset}\n" "${APP_NAME}"

@@ -95,6 +95,12 @@ declare -A REQUIRED_BINS=(
     [xdg-open]="xdg-utils|xdg-utils"
     [curl]="curl|curl"
     [systemctl]="systemd|systemd"
+    [whisper-cli]="whisper-cpp|whisper-cpp"
+)
+
+# List of packages that belong to the AUR on Arch (adjust as needed)
+declare -A ARCH_AUR_PKGS=(
+    [whisper-cpp]=1
 )
 
 check_prereqs() {
@@ -103,6 +109,8 @@ check_prereqs() {
     distro=$(detect_distro)
 
     local missing_bins=()
+    local arch_pacman_pkgs=()
+    local arch_aur_pkgs=()
     local missing_pkgs=()
 
     for bin in "${!REQUIRED_BINS[@]}"; do
@@ -115,7 +123,18 @@ check_prereqs() {
                 debian)  pkg="${pkgs##*|}" ;;
                 *)       pkg="?" ;;
             esac
-            [[ "$pkg" != "-" && "$pkg" != "?" ]] && missing_pkgs+=("$pkg")
+
+            if [[ "$pkg" != "-" && "$pkg" != "?" ]]; then
+                if [[ "$distro" == "arch" ]]; then
+                    if [[ -n "${ARCH_AUR_PKGS[$pkg]}" ]]; then
+                        arch_aur_pkgs+=("$pkg")
+                    else
+                        arch_pacman_pkgs+=("$pkg")
+                    fi
+                else
+                    missing_pkgs+=("$pkg")
+                fi
+            fi
         fi
     done
 
@@ -124,8 +143,20 @@ check_prereqs() {
         echo
         case "$distro" in
             arch)
-                printf "To install on Arch/CachyOS/Manjaro, run:\n"
-                printf "    ${c_bold}sudo pacman -S %s${c_reset}\n" "${missing_pkgs[*]}"
+                if [[ ${#arch_pacman_pkgs[@]} -gt 0 ]]; then
+                    printf "To install official packages on Arch/CachyOS/Manjaro, run:\n"
+                    printf "    ${c_bold}sudo pacman -S %s${c_reset}\n\n" "${arch_pacman_pkgs[*]}"
+                fi
+                if [[ ${#arch_aur_pkgs[@]} -gt 0 ]]; then
+                    if command -v yay >/dev/null 2>&1; then
+                        printf "To install AUR packages, run:\n"
+                        printf "    ${c_bold}yay -S %s${c_reset}\n\n" "${arch_aur_pkgs[*]}"
+                    else
+                        printf "${c_bold}Note:${c_reset} The following package(s) are from the AUR (yay not detected):\n"
+                        printf "    %s\n" "${arch_aur_pkgs[*]}"
+                        printf "Please install them manually using your preferred AUR helper (e.g., yay, paru).\n\n"
+                    fi
+                fi
                 ;;
             debian)
                 printf "To install on Debian/Ubuntu/Kubuntu, run:\n"
